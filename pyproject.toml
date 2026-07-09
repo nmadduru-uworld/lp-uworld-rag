@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lp-uworld-rag"
+version = "0.1.0"
+description = "Shared functional/technical RAG for the UWorld LP Confluence knowledge base (docs_functional + docs_technical)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # Orchestration / node model
+    "llama-index-core>=0.11",
+    # Embeddings (nomic via HuggingFace)
+    "llama-index-embeddings-huggingface>=0.3",
+    "einops>=0.7",  # required by nomic-embed-text-v1.5's remote code
+    # Vector store (local, in-process, SQLite-backed)
+    "chromadb>=0.5",
+    "llama-index-vector-stores-chroma>=0.2",
+    # Lexical retrieval + RRF fusion
+    "llama-index-retrievers-bm25>=0.4",
+    # Optional cross-encoder rerank (RerankConfig.enabled)
+    "llama-index-postprocessor-sbert-rerank>=0.2",
+    # MCP server
+    "mcp>=1.2",
+    # Config
+    "pydantic>=2.6",
+    # Confluence REST v2 client
+    "requests>=2.31",
+    "markdownify>=0.13",
+]
+
+[project.scripts]
+lp-uworld-rag = "lp_uworld_rag.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lp_uworld_rag"]

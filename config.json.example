@@ -1,0 +1,49 @@
+{
+  "embed": {
+    "model": "nomic-ai/nomic-embed-text-v1.5",
+    "trustRemoteCode": true,
+    "queryPrefix": "search_query: ",
+    "textPrefix": "search_document: ",
+    "dim": 768,
+    "device": "auto"
+  },
+  "store": {
+    "functionalPersistDir": "chroma_functional",
+    "technicalPersistDir": "chroma_technical"
+  },
+  "collections": {
+    "functional": "docs_functional",
+    "technical": "docs_technical",
+    "functionalEmbedModel": null,
+    "technicalEmbedModel": null
+  },
+  "retrieval": {
+    "topK": 8,
+    "poolSize": 24,
+    "fusionMode": "reciprocal_rerank",
+    "numQueries": 1,
+    "quotas": { "endpoint": 2, "controller-context": 1, "db-collection": 1 }
+  },
+  "rerank": {
+    "enabled": true,
+    "model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "candidatePoolCap": 40
+  },
+  "confluence": {
+    "baseUrl": "https://uworld.atlassian.net",
+    "rootPageId": "7472545873",
+    "functionalRootPageId": "7475658997",
+    "excludedTitles": ["Artifacts", "Order(api)"],
+    "cloudId": "a9db67d5-6074-4da6-9204-57a0edf50495",
+    "manifestPath": null,
+    "emailEnvVar": "CONFLUENCE_EMAIL",
+    "apiTokenEnvVar": "CONFLUENCE_API_TOKEN",
+    "emailValue": null,
+    "apiTokenValue": null
+  },
+  "repos": {
+    "manifests": [
+      "D:/uwwebtech.learningplatform.reports.api/tools/ReportsRagPy/rag-manifest.json"
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+chroma_functional/
+chroma_technical/
+config.json
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
