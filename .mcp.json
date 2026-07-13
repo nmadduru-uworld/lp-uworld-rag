@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "lp-uworld-rag": {
+      "command": "D:/lp-uworld-rag/.venv/Scripts/python.exe",
+      "args": ["-m", "lp_uworld_rag", "mcp"]
+    }
+  }
+}
