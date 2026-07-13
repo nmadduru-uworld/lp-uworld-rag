@@ -42,7 +42,11 @@ class CollectionsConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
-    topK: int = 8
+    # WS1 (token-economy plan): lowered 8->5. WS0's token_usage_bench.py baseline showed default-topK
+    # retrieval costing MORE tokens than just reading the one relevant file in several scenarios --
+    # narrower default, widen only when a caller's query genuinely needs breadth (top_k override
+    # still available on every tool).
+    topK: int = 5
     # Candidate pool fetched from fusion before quota selection cuts it down to topK.
     poolSize: int = 24
     fusionMode: str = "reciprocal_rerank"  # QueryFusionRetriever RRF
@@ -123,7 +127,14 @@ class ReposConfig(BaseModel):
     # Paths to other repos' rag-manifest.json (see docs/repo-rag-contract.md) -- absolute, or
     # relative to this config file's own directory (RagConfig.root_path), resolved lazily by
     # resolved_manifest_paths() so nothing here needs the manifests to exist just to load config.
+    # Legacy/serve-mode repos; specs under repos/<repoKey>/ingest.json are discovered separately.
     manifests: list[str] = Field(default_factory=list)
+    # Machine-local checkout path per repoKey -- where that repo's source lives on THIS machine, for
+    # the shared code-ingestion engine (see repo_ingest). Gitignored (this lives in config.json, not
+    # the committed config.json.example) because it's an absolute, machine-specific path; the
+    # committed per-repo spec (repos/<repoKey>/ingest.json) holds everything shareable. Same
+    # local-override precedent as ConfluenceConfig.emailValue.
+    checkouts: dict[str, str] = Field(default_factory=dict)
 
 
 class RagConfig(BaseModel):
@@ -159,6 +170,24 @@ class RagConfig(BaseModel):
             p = Path(raw)
             out.append(p if p.is_absolute() else (self.root_path / p).resolve())
         return out
+
+    def repos_dir(self) -> Path:
+        """Directory holding committed per-repo ingestion specs: repos/common.json +
+        repos/<repoKey>/ingest.json (ships with this project)."""
+        return self.root_path / "repos"
+
+    def code_store_dir(self, repo_key: str) -> Path:
+        """Where a repo's code index is written locally -- derived from repoKey, gitignored."""
+        return self.root_path / "code_stores" / repo_key
+
+    def resolved_checkout(self, repo_key: str) -> Path | None:
+        """Machine-local source checkout for a repo (from ``repos.checkouts``), resolved against
+        ``root_path`` when relative. None if not configured on this machine."""
+        raw = self.repos.checkouts.get(repo_key)
+        if not raw:
+            return None
+        p = Path(raw)
+        return p if p.is_absolute() else (self.root_path / p).resolve()
 
 
 def _default_config_path() -> Path:

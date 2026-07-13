@@ -7,6 +7,7 @@
     python -m lp_uworld_rag eval
     python -m lp_uworld_rag validate
     python -m lp_uworld_rag mcp
+    python -m lp_uworld_rag ingest-code (--repo REPO | --all) [--full]
     python -m lp_uworld_rag deep-query "<text>" [--repo REPO ...] [--top-k-docs N] [--top-k-code N]
     python -m lp_uworld_rag query-code "<text>" [--repo REPO] [--top-k N] [--file-hint PATH ...]
     python -m lp_uworld_rag repos [--validate]
@@ -100,13 +101,41 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ingest_code(args: argparse.Namespace) -> int:
+    """Ingest one repo's (or every configured repo's) code into its own code_stores/<repoKey> index
+    via the shared engine (repo_ingest), pointed at the checkout path in config.json."""
+    from .config import load_config
+    from .repo_ingest.pipeline import run_code_ingest
+    from .repo_ingest.spec import discover_repo_keys, load_job
+
+    cfg = load_config()
+    if args.all:
+        keys = discover_repo_keys(cfg.repos_dir())
+        if not keys:
+            print("no repo specs found under repos/*/ingest.json", file=sys.stderr)
+            return 1
+    else:
+        keys = [args.repo]
+
+    failed = False
+    for key in keys:
+        try:
+            job = load_job(cfg, key)
+        except Exception as exc:
+            print(f"[ingest-code] {key}: cannot start -- {exc}", file=sys.stderr)
+            failed = True
+            continue
+        run_code_ingest(job, full=args.full)
+    return 1 if failed else 0
+
+
 def _cmd_deep_query(args: argparse.Namespace) -> int:
     from .config import load_config
     from .orchestrator import deep_query
     from .repo_registry import RepoRegistry
 
     cfg = load_config()
-    registry = RepoRegistry(cfg.resolved_manifest_paths())
+    registry = RepoRegistry.from_config(cfg)
     result = deep_query(cfg, registry, args.text, top_k_docs=args.top_k_docs,
                          top_k_code=args.top_k_code, repos=args.repo)
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -119,7 +148,7 @@ def _cmd_query_code(args: argparse.Namespace) -> int:
     from .repo_registry import RepoRegistry
 
     cfg = load_config()
-    registry = RepoRegistry(cfg.resolved_manifest_paths())
+    registry = RepoRegistry.from_config(cfg)
     result = query_code(registry, args.text, repo=args.repo, file_hints=args.file_hint,
                          top_k=args.top_k)
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -131,7 +160,7 @@ def _cmd_repos(args: argparse.Namespace) -> int:
     from .repo_registry import RepoRegistry
 
     cfg = load_config()
-    registry = RepoRegistry(cfg.resolved_manifest_paths())
+    registry = RepoRegistry.from_config(cfg)
     ok = True
 
     if not args.validate:
@@ -166,7 +195,7 @@ def _cmd_validate_citations(args: argparse.Namespace) -> int:
     from .repo_registry import RepoRegistry
 
     cfg = load_config()
-    registry = RepoRegistry(cfg.resolved_manifest_paths())
+    registry = RepoRegistry.from_config(cfg)
     stale = validate_citations(cfg, registry)
     print(json.dumps(stale, indent=2, ensure_ascii=False))
     return 1 if stale else 0
@@ -210,6 +239,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_mcp = sub.add_parser("mcp", help="Run as an MCP server over stdio.")
     p_mcp.set_defaults(func=_cmd_mcp)
+
+    p_ingest_code = sub.add_parser(
+        "ingest-code", help="Ingest a repo's code into its own index via the shared engine.")
+    ic_group = p_ingest_code.add_mutually_exclusive_group(required=True)
+    ic_group.add_argument("--repo", help="repoKey of a repo with a repos/<repoKey>/ingest.json spec.")
+    ic_group.add_argument("--all", action="store_true", help="Ingest every configured repo.")
+    p_ingest_code.add_argument("--full", action="store_true",
+                                help="Delete and rebuild the collection instead of delta-syncing.")
+    p_ingest_code.set_defaults(func=_cmd_ingest_code)
 
     p_deep_query = sub.add_parser("deep-query", help="Docs -> route -> per-repo code retrieval.")
     p_deep_query.add_argument("text", help="Natural-language question.")

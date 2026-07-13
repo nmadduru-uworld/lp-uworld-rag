@@ -18,7 +18,7 @@
     "technicalEmbedModel": null
   },
   "retrieval": {
-    "topK": 8,
+    "topK": 5,
     "poolSize": 24,
     "fusionMode": "reciprocal_rerank",
     "numQueries": 1,
@@ -42,8 +42,9 @@
     "apiTokenValue": null
   },
   "repos": {
-    "manifests": [
-      "D:/uwwebtech.learningplatform.reports.api/tools/ReportsRagPy/rag-manifest.json"
-    ]
+    "manifests": [],
+    "checkouts": {
+      "reports": "D:/uwwebtech.learningplatform.reports.api"
+    }
   }
 }

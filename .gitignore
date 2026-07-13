@@ -1,5 +1,6 @@
 chroma_functional/
 chroma_technical/
+code_stores/
 config.json
 __pycache__/
 *.pyc

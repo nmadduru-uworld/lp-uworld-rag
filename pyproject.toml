@@ -17,6 +17,11 @@ dependencies = [
     # Vector store (local, in-process, SQLite-backed)
     "chromadb>=0.5",
     "llama-index-vector-stores-chroma>=0.2",
+    # C# parsing for the shared code-ingestion engine (repo_ingest.chunkers.csharp).
+    # tree-sitter-language-pack (all other languages, via chunkers.generic) is intentionally NOT
+    # pinned here -- it's deferred until a non-C# repo actually onboards (see repo-rag-contract.md).
+    "tree-sitter>=0.21",
+    "tree-sitter-c-sharp>=0.21",
     # Lexical retrieval + RRF fusion
     "llama-index-retrievers-bm25>=0.4",
     # Optional cross-encoder rerank (RerankConfig.enabled)

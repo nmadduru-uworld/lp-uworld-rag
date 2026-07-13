@@ -35,7 +35,10 @@ class IndexStoreConfig(BaseModel):
 
 
 class IndexRetrievalConfig(BaseModel):
-    topK: int = 8
+    # WS1 (token-economy plan): lowered 8->5 -- default-topK retrieval was shown (token_usage_bench.py
+    # baseline) to cost MORE tokens than reading the one relevant file in several scenarios. A repo's
+    # manifest can still override this per its own needs.
+    topK: int = 5
     poolSize: int = 24
     fusionMode: str = "reciprocal_rerank"
     numQueries: int = 1
@@ -59,6 +62,11 @@ class IndexConfig(BaseModel):
     embed: IndexEmbedConfig
     store: IndexStoreConfig
     retrieval: IndexRetrievalConfig = Field(default_factory=IndexRetrievalConfig)
+    # Optional L1 retrieval override (see repo_registry.get_retriever): a dotted import path or a
+    # ``.py`` file path to a repo-supplied factory returning an object with a
+    # ``query(question, top_k, file_hints) -> dict`` method, for a repo whose retrieval is too
+    # complex for this config alone. None -> use the built-in engine below (the default).
+    retriever: str | None = None
 
 
 def _resolve_device(cfg: IndexEmbedConfig) -> str:

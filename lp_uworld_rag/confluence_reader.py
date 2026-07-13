@@ -22,7 +22,13 @@ _METADATA_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
 _BACKTICK_RE = re.compile(r"`([^`]*)`")
 _CONTROLLERS_SECTION_RE = re.compile(r"^##\s+Controllers\s*$", re.MULTILINE)
 _H2_RE = re.compile(r"^##\s+\S", re.MULTILINE)
+_H2_HEADING_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 _H3_RE = re.compile(r"^###\s+(.+)$", re.MULTILINE)
+
+# WS4 (token-economy plan): doc_types with rich multi-section bodies worth splitting small-to-big.
+# Every other doc_type keeps today's one-node-per-page/section behavior (chunker.py's module
+# docstring explains why -- they're already thin by authoring convention).
+_SECTION_SPLIT_DOC_TYPES = frozenset({"endpoint", "db-collection"})
 _VERB_TITLE_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE)\s")
 _BRACKET_TYPE_TITLE_RE = re.compile(r"\[[^\]]+\]\s*$")
 
@@ -105,6 +111,34 @@ def _crawl_from(cfg: RagConfig, root_page_id: str) -> list[dict]:
     return pages
 
 
+def _split_page_sections(markdown: str) -> tuple[str, list[tuple[str, str]]] | None:
+    """WS4: split an endpoint/db-collection page into ``(overview_text, [(heading, section_text), ...])``
+    for small-to-big chunking. The overview folds in everything before the first ``##`` heading
+    (the Metadata line) plus the ``## Purpose`` section itself if present, matching the Template
+    v3 page's own "Purpose/summary lead ... chunked as the overview parent" rule; every other ``##``
+    section becomes its own leaf.
+
+    Returns ``None`` (whole-page fallback, unchanged from before WS4) when the page has no ``##``
+    headings at all, or has only a Purpose section and nothing else worth splitting out.
+    """
+    headings = list(_H2_HEADING_RE.finditer(markdown))
+    if not headings:
+        return None
+
+    overview_text = markdown[: headings[0].start()].strip()
+    sections: list[tuple[str, str]] = []
+    for i, h in enumerate(headings):
+        start = h.end()
+        end = headings[i + 1].start() if i + 1 < len(headings) else len(markdown)
+        sections.append((h.group(1).strip(), markdown[start:end].strip()))
+
+    if sections and sections[0][0].lower() == "purpose":
+        overview_text = f"{overview_text}\n\n## {sections[0][0]}\n\n{sections[0][1]}".strip()
+        sections = sections[1:]
+
+    return (overview_text, sections) if sections else None
+
+
 def _split_controller_sections(markdown: str) -> list[tuple[str, str]]:
     """Split a repo-registry page's ``## Controllers`` section into (ControllerName, text) pairs."""
     m = _CONTROLLERS_SECTION_RE.search(markdown)
@@ -170,7 +204,7 @@ def read_all(cfg: RagConfig, pages: list[dict] | None = None) -> list:
     cross-referenced field like a controller's ``used_by`` changing even when that controller's own
     page didn't). Pass ``pages`` (from a prior ``crawl()`` call) to avoid crawling twice in one run.
     """
-    pages = pages if pages is not None else _crawl_tree(cfg)
+    pages = pages if pages is not None else crawl(cfg)
     title_by_id = {p["id"]: p["title"] for p in pages}
 
     nodes = []
@@ -204,11 +238,30 @@ def read_all(cfg: RagConfig, pages: list[dict] | None = None) -> list:
             # and as a required-field check (eval.py tier 1). The endpoint->db-collection join no
             # longer runs through route strings; it reads db_ids directly (see _build_tags above).
             tags["route"] = page["title"]
-        node = chunker.build_node(
-            text=body["markdown"], title=body["title"] or page["title"],
-            key=page["id"], doc_type=doc_type, metadata=tags,
-        )
-        nodes.append(node)
+
+        page_title = body["title"] or page["title"]
+        split = _split_page_sections(body["markdown"]) if doc_type in _SECTION_SPLIT_DOC_TYPES else None
+        if split is not None:
+            # WS4: overview (Purpose) parent + one leaf per remaining section, small-to-big --
+            # every leaf carries the SAME tags as a whole-page node would (so eval.py's per-doc_type
+            # checks, and stable-id lookups like endpoint_id, work identically whether a hit is the
+            # overview or one of its sections), plus its own `parent_id` back to the overview.
+            overview_text, sections = split
+            overview_id = chunker.compute_id(doc_type, page["id"], page_title, overview_text)
+            nodes.append(chunker.build_node(
+                text=overview_text, title=page_title, key=page["id"], doc_type=doc_type, metadata=tags,
+            ))
+            for heading, section_text in sections:
+                leaf_tags = {**tags, "parent_id": overview_id, "section": heading}
+                nodes.append(chunker.build_node(
+                    text=section_text, title=f"{page_title} — {heading}",
+                    key=f'{page["id"]}::{heading}', doc_type=doc_type, metadata=leaf_tags,
+                ))
+        else:
+            nodes.append(chunker.build_node(
+                text=body["markdown"], title=page_title,
+                key=page["id"], doc_type=doc_type, metadata=tags,
+            ))
 
         if doc_type == "endpoint":
             endpoint_records.append({

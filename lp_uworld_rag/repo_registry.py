@@ -10,6 +10,8 @@ model / index load cost on every query).
 from __future__ import annotations
 
 import asyncio
+import importlib
+import importlib.util
 import json
 import re
 import threading
@@ -231,14 +233,15 @@ class _RepoSession:
             self._stop_event = None
 
 
-class _DirectIndexSession:
-    """A repo's "index" manifest, retrieved with no subprocess and no IPC: builds -- and keeps for
-    the process's lifetime -- one :class:`direct_index.RetrieverCache` (embedding model + Chroma +
-    BM25 corpus), the same amortization :class:`_RepoSession` gets from keeping an MCP subprocess
-    alive, minus the subprocess."""
+class _DefaultRetriever:
+    """L0 retriever: the built-in ``direct_index`` engine. Builds -- and keeps for the process's
+    lifetime -- one :class:`direct_index.RetrieverCache` (embedding model + Chroma + BM25 corpus),
+    the same amortization :class:`_RepoSession` gets from keeping an MCP subprocess alive, minus the
+    subprocess."""
 
-    def __init__(self, manifest: RepoManifest):
-        self.manifest = manifest
+    def __init__(self, persist_dir: Path, index_cfg: IndexConfig):
+        self.persist_dir = persist_dir
+        self.index_cfg = index_cfg
         self._cache = None
         self._lock = threading.Lock()
 
@@ -247,22 +250,82 @@ class _DirectIndexSession:
             with self._lock:
                 if self._cache is None:
                     from . import direct_index
-                    self._cache = direct_index.build_retriever_cache(
-                        self.manifest.resolved_index_persist_dir(), self.manifest.index
-                    )
+                    self._cache = direct_index.build_retriever_cache(self.persist_dir, self.index_cfg)
         return self._cache
 
     def query(self, question: str, top_k: int | None, file_hints: list[str] | None) -> dict:
         from . import direct_index
-        cache = self._ensure_cache()
-        return direct_index.query(
-            self.manifest.resolved_index_persist_dir(), self.manifest.index, question,
-            top_k=top_k, file_hints=file_hints, cache=cache,
-        )
+        return direct_index.query(self.persist_dir, self.index_cfg, question,
+                                  top_k=top_k, file_hints=file_hints, cache=self._ensure_cache())
+
+
+def _load_retriever_factory(spec: str):
+    """Import an L1 retriever override (same resolution as chunker overrides): a ``.py`` file path,
+    or a dotted module path with optional ``:attr`` (defaults to module-level ``factory`` /
+    ``get_factory()``). The factory's ``create(persist_dir, index_cfg)`` must return an object with a
+    ``query(question, top_k, file_hints) -> dict`` method."""
+    attr = None
+    if ":" in spec and not Path(spec).exists():
+        spec, attr = spec.rsplit(":", 1)
+    if spec.endswith(".py") or ("/" in spec) or ("\\" in spec):
+        path = Path(spec).resolve()
+        if not path.exists():
+            raise RuntimeError(f"retriever override file not found: {path}")
+        mod_spec = importlib.util.spec_from_file_location(f"_repo_retriever_{path.stem}", path)
+        module = importlib.util.module_from_spec(mod_spec)
+        mod_spec.loader.exec_module(module)
+    else:
+        module = importlib.import_module(spec)
+    if attr:
+        factory = getattr(module, attr)
+    elif hasattr(module, "factory"):
+        factory = module.factory
+    elif hasattr(module, "get_factory"):
+        factory = module.get_factory()
+    else:
+        raise RuntimeError(f"retriever override {spec!r} exposes neither 'factory' nor 'get_factory()'")
+    return factory() if isinstance(factory, type) else factory
+
+
+def get_retriever(retriever_spec: str | None, persist_dir: Path, index_cfg: IndexConfig):
+    """Resolve a repo's retriever: L0 built-in ``direct_index`` when ``retriever_spec`` is None,
+    else an L1 custom factory. Either way the caller validates the returned ``query`` output against
+    :class:`CodeQueryResult`, so the contract's guardrails hold regardless of who retrieves."""
+    if not retriever_spec:
+        return _DefaultRetriever(persist_dir, index_cfg)
+    factory = _load_retriever_factory(retriever_spec)
+    retriever = factory.create(persist_dir, index_cfg)
+    if not hasattr(retriever, "query"):
+        raise RuntimeError(f"retriever override {retriever_spec!r} produced an object with no .query method")
+    return retriever
+
+
+class _DirectIndexSession:
+    """A repo's "index" backend, retrieved with no subprocess and no IPC. Delegates to whichever
+    retriever :func:`get_retriever` resolves -- the built-in engine (L0) or the repo's own custom
+    retriever (L1, manifest ``index.retriever``) -- built lazily and kept for the process lifetime."""
+
+    def __init__(self, manifest: RepoManifest):
+        self.manifest = manifest
+        self._retriever = None
+        self._lock = threading.Lock()
+
+    def _ensure(self):
+        if self._retriever is None:
+            with self._lock:
+                if self._retriever is None:
+                    self._retriever = get_retriever(
+                        self.manifest.index.retriever,
+                        self.manifest.resolved_index_persist_dir(),
+                        self.manifest.index,
+                    )
+        return self._retriever
+
+    def query(self, question: str, top_k: int | None, file_hints: list[str] | None) -> dict:
+        return self._ensure().query(question, top_k, file_hints)
 
     def status(self) -> str:
         from . import direct_index
-        self._ensure_cache()  # surfaces load errors at the same point _RepoSession's ready-wait would
         return direct_index.status(self.manifest.resolved_index_persist_dir(), self.manifest.index)
 
 
@@ -272,42 +335,69 @@ class RepoRegistry:
     first use -- an MCP session for "serve" mode, or an in-process retriever cache for "index" mode
     (preferred when a manifest declares both)."""
 
-    def __init__(self, manifest_paths: list[str | Path]):
+    def __init__(self, manifest_paths: list[str | Path] | None = None,
+                 manifests: list[RepoManifest] | None = None):
         self.manifests: dict[str, RepoManifest] = {}
         self.errors: dict[str, str] = {}
         self._serve_sessions: dict[str, _RepoSession] = {}
         self._index_sessions: dict[str, _DirectIndexSession] = {}
         # repoKey -> resolved index persist dir, for cross-repo collision detection (see below).
         self._persist_dirs: dict[str, Path] = {}
-        for raw_path in manifest_paths:
+        for raw_path in (manifest_paths or []):
             try:
                 manifest = RepoManifest.load(raw_path)
             except Exception as exc:
                 self.errors[str(raw_path)] = str(exc)
                 continue
-            if manifest.repoKey in self.manifests:
-                existing = self.manifests[manifest.repoKey].manifest_path
-                self.errors[str(raw_path)] = (
-                    f"duplicate repoKey {manifest.repoKey!r} (already registered from {existing})"
+            self._register(manifest, str(raw_path))
+        # Pre-built (in-memory) manifests -- e.g. from discovered repos/<repoKey>/ingest.json specs
+        # (see RepoRegistry.from_config). Same dedupe + collision guard as file-loaded manifests.
+        for manifest in (manifests or []):
+            self._register(manifest, f"spec:{manifest.repoKey}")
+
+    def _register(self, manifest: RepoManifest, source_label: str) -> None:
+        if manifest.repoKey in self.manifests:
+            existing = self.manifests[manifest.repoKey].manifest_path
+            self.errors[source_label] = (
+                f"duplicate repoKey {manifest.repoKey!r} (already registered from {existing})"
+            )
+            return
+        # Cross-collection guard: an index-mode repo must own a Chroma persist directory that no
+        # other registered repo already uses. Without this, a second repo whose manifest/spec was
+        # copy-pasted (and whose persistDir wasn't changed) would write into the first repo's store,
+        # silently merging two unrelated code corpora into one collection with no error -- the single
+        # most likely failure when onboarding a new repo. repoKey uniqueness (above) doesn't catch
+        # it: two distinct repoKeys can still resolve to the same directory.
+        if manifest.index is not None:
+            pdir = manifest.resolved_index_persist_dir()
+            clash = next((k for k, d in self._persist_dirs.items() if d == pdir), None)
+            if clash is not None:
+                self.errors[source_label] = (
+                    f"repo {manifest.repoKey!r} index.store.persistDir resolves to {pdir}, "
+                    f"already used by repo {clash!r} -- each repo needs its own store directory"
                 )
-                continue
-            # Cross-collection guard: an index-mode repo must own a Chroma persist directory that no
-            # other registered repo already uses. Without this, a second repo whose manifest was
-            # copy-pasted (and whose persistDir wasn't changed) would write into the first repo's
-            # store, silently merging two unrelated code corpora into one collection with no error --
-            # the single most likely failure when onboarding a new repo. repoKey uniqueness (above)
-            # doesn't catch it: two distinct repoKeys can still resolve to the same directory.
-            if manifest.index is not None:
-                pdir = manifest.resolved_index_persist_dir()
-                clash = next((k for k, d in self._persist_dirs.items() if d == pdir), None)
-                if clash is not None:
-                    self.errors[str(raw_path)] = (
-                        f"repo {manifest.repoKey!r} index.store.persistDir resolves to {pdir}, "
-                        f"already used by repo {clash!r} -- each repo needs its own store directory"
-                    )
-                    continue
-                self._persist_dirs[manifest.repoKey] = pdir
-            self.manifests[manifest.repoKey] = manifest
+                return
+            self._persist_dirs[manifest.repoKey] = pdir
+        self.manifests[manifest.repoKey] = manifest
+
+    @classmethod
+    def from_config(cls, cfg) -> "RepoRegistry":
+        """Build a registry from config: legacy/serve-mode external manifests
+        (``repos.manifests``) PLUS every discovered per-repo spec (``repos/<repoKey>/ingest.json``,
+        rendered to an in-memory index-mode manifest). A spec that fails to build is recorded as an
+        error rather than raised, so one broken repo doesn't block the rest."""
+        from .repo_ingest import spec as _spec
+
+        prebuilt: list[RepoManifest] = []
+        spec_errors: dict[str, str] = {}
+        for key in _spec.discover_repo_keys(cfg.repos_dir()):
+            try:
+                prebuilt.append(_spec.to_manifest(cfg, key))
+            except Exception as exc:
+                spec_errors[f"spec:{key}"] = str(exc)
+        registry = cls(cfg.resolved_manifest_paths(), manifests=prebuilt)
+        registry.errors.update(spec_errors)
+        return registry
 
     def repo_keys(self) -> list[str]:
         return sorted(self.manifests)

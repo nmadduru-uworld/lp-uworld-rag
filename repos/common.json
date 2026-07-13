@@ -1,0 +1,35 @@
+{
+  "language": "csharp",
+  "chunker": null,
+  "sourceExclude": ["bin", "obj", ".g.cs"],
+  "rulesDir": ".claude/rules",
+  "claudeMd": "CLAUDE.md",
+  "retriever": null,
+  "embed": {
+    "model": "nomic-ai/CodeRankEmbed",
+    "trustRemoteCode": true,
+    "queryPrefix": "Represent this query for searching relevant code: ",
+    "textPrefix": "",
+    "device": "auto"
+  },
+  "retrieval": {
+    "topK": 5,
+    "poolSize": 24,
+    "fusionMode": "reciprocal_rerank",
+    "numQueries": 1,
+    "priorityOrder": ["code", "entity", "rule"],
+    "quotas": { "code": 2, "entity": 1 },
+    "minCategoryChars": 250,
+    "minCategoryExtra": 2,
+    "hintBoost": 1.5,
+    "categoryMap": {
+      "entity": "entity",
+      "controller": "code",
+      "service": "code",
+      "repository": "code",
+      "utility": "code",
+      "other": "code"
+    },
+    "overviewHeadingSuffix": " (overview)"
+  }
+}

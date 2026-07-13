@@ -42,6 +42,28 @@ _CTRL_ID_RE = re.compile(r"^ctrl::[^:\s\[\]'\"/\\]+::[^:\s\[\]'\"/\\]+$")
 _EP_ID_RE = re.compile(r"^ep::[^:\s\[\]'\"/\\]+::[^:\s\[\]'\"/\\{}]+$")
 _DB_ID_RE = re.compile(r"^db::[^:\s\[\]'\"/\\]+::[^:\s\[\]'\"/\\]+$")
 
+# WS0 (token-economy plan): tiktoken's cl100k_base as a consistent, real proxy for Claude token
+# count (Claude's own tokenizer isn't public) -- same choice ReportsRagPy's token_usage_bench.py
+# makes, so numbers are comparable across both projects. Encoder built once, lazily, since eval's
+# --help/config-loading path shouldn't require tiktoken installed.
+_ENC = None
+
+
+def count_tokens(text: str | None) -> int:
+    global _ENC
+    if not text:
+        return 0
+    if _ENC is None:
+        import tiktoken
+        _ENC = tiktoken.get_encoding("cl100k_base")
+    return len(_ENC.encode(text, disallowed_special=()))
+
+
+def _chunks_tokens(chunks: list[dict]) -> int:
+    """Total tokens across a retrieval result's chunk ``content`` -- what would actually land in
+    Claude's context if this response were handed to an agent verbatim (WS0's "tokens_in")."""
+    return sum(count_tokens(c.get("content")) for c in chunks)
+
 
 @dataclass
 class Finding:
@@ -264,7 +286,7 @@ def check_endpoint_db_mapping(cache: RetrieverCache) -> list[Finding]:
             continue
         where = f"technical/endpoint/{md.get('title')!r}"
         expected_db_ids = set(decode_list_field(md.get("db_ids")))
-        citations = _resolve_citations(md, "technical", cache, exclude_ids=set())
+        citations = _resolve_citations(md, node_id, "technical", cache, exclude_ids=set())
         cited_db_ids = {c["id"] for c in citations if c["doc_type"] == "db-collection"}
 
         missing = expected_db_ids - cited_db_ids
@@ -360,6 +382,7 @@ def run_queries(cfg: RagConfig, cache=None) -> list[dict]:
             "cited_on_top": cited_on_top,  # accept_id appears in the #1 hit's own citations
             "passed": (direct_rank is not None and direct_rank <= 3) or cited_on_top,
             "elapsed_ms": elapsed_ms,
+            "tokens_in": _chunks_tokens(chunks),  # WS0: what this response would cost in Claude's context
         })
     return results
 
@@ -465,9 +488,15 @@ def run_orchestrator_cases(cfg: RagConfig, registry, cache=None) -> list[dict] |
         files_ok = True
         if case.accept_files:
             files_ok = any(f and any(f.endswith(basename) for basename in case.accept_files) for f in files_seen)
+        # WS0: the full assembled payload tokens -- docs chunks + every routed repo's code chunks --
+        # is the actual per-`deep_query`-call cost landing in an agent's context today (both stages
+        # inline full `content` for every hit; see the plan's WS2/WS4 for the levers that shrink this).
+        code_chunks = [c for chunks in r["code"].values() for c in chunks]
+        payload_tokens = _chunks_tokens(r["docs"]["chunks"]) + _chunks_tokens(code_chunks)
         results.append({
             "case": case, "routing": routing, "files_seen": sorted(f for f in files_seen if f),
             "passed": repos_ok and fallback_ok and files_ok,
+            "payload_tokens": payload_tokens,
         })
     return results
 
@@ -530,13 +559,18 @@ def run(cfg: RagConfig) -> bool:
             status = "FAIL"
             query_failures += 1
         print(f"  [{status}] [{case.scope}] {case.question}")
-        print(f"         top hit: {top_desc}  ({r['elapsed_ms']:.0f}ms)" + (f"  -- {case.note}" if case.note else ""))
+        print(f"         top hit: {top_desc}  ({r['elapsed_ms']:.0f}ms, {r['tokens_in']} tokens)"
+              + (f"  -- {case.note}" if case.note else ""))
 
     avg_ms = sum(r["elapsed_ms"] for r in query_results) / len(query_results)
+    total_tokens = sum(r["tokens_in"] for r in query_results)
+    avg_tokens = total_tokens / len(query_results)
     print()
     print(f"  {len(scored) - query_failures}/{len(scored)} scored queries passed (rank <=3 or cited on #1 hit) "
           f"({len(query_results) - len(scored)} informational, not scored)")
     print(f"  avg query latency: {avg_ms:.0f}ms")
+    print(f"  tokens_in: {total_tokens} total across {len(query_results)} queries "
+          f"({avg_tokens:.0f} avg/query) -- WS0 baseline for the token-economy plan (WS1-WS5)")
 
     print()
     print("-" * 90)
@@ -569,7 +603,7 @@ def run(cfg: RagConfig) -> bool:
     print("=" * 90)
     from .repo_registry import RepoRegistry
 
-    registry = RepoRegistry(cfg.resolved_manifest_paths())
+    registry = RepoRegistry.from_config(cfg)
     orchestrator_failures = 0
     orchestrator_results = run_orchestrator_cases(cfg, registry, cache=cache)
     if orchestrator_results is None:
@@ -585,9 +619,12 @@ def run(cfg: RagConfig) -> bool:
                     orchestrator_failures += 1
             print(f"  [{status}] {r['case'].question}")
             print(f"         routed: {r['routing']['repos']}  fallback_used: {r['routing']['fallback_used']}"
-                  f"  files_seen: {r['files_seen']}")
+                  f"  files_seen: {r['files_seen']}  payload_tokens: {r['payload_tokens']}")
         print(f"\n  {len(scored_orchestrator) - orchestrator_failures}/{len(scored_orchestrator)} scored "
               f"orchestrator cases passed ({len(orchestrator_results) - len(scored_orchestrator)} informational, not scored)")
+        total_payload_tokens = sum(r["payload_tokens"] for r in orchestrator_results)
+        print(f"  assembled deep_query payload tokens: {total_payload_tokens} total across "
+              f"{len(orchestrator_results)} call(s) -- WS0 baseline for orchestrator-level token cost")
     if registry.errors:
         for path, err in registry.errors.items():
             print(f"  [WARN ] (manifest error) {path}: {err}")

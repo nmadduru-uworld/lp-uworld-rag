@@ -184,9 +184,52 @@ embedding-model + Chroma load for `index`) -> `rag_status` returns non-empty -> 
 returns a schema-valid response. Its output reports which backend (`index`/`serve`) was actually
 exercised.
 
+## 5. Centralized ingestion (recommended) -- specs + `ingest-code`, no in-repo tool
+
+A repo does **not** need to carry a RAG tool (its own venv/deps/ingest code) in-tree. The shared
+engine (`lp_uworld_rag/repo_ingest/`) ingests any repo's code on lp-uworld-rag's single venv by
+being pointed at the repo's checkout. This is the recommended path; `serve` mode (section 2b) remains
+for a repo that genuinely needs a bespoke process.
+
+Per-repo config is split by what's shareable vs machine-local:
+
+- **`repos/common.json`** (committed) -- shared defaults, deep-merged under each repo's override.
+- **`repos/<repoKey>/ingest.json`** (committed) -- per-repo override. Deep-merges over common
+  (dicts merge; lists such as `sourceExclude`/`sourceDirs` **replace**). Holds `language`,
+  optional `chunker`/`retriever` overrides (below), `sourceDirs`, `sourceExclude`, `rulesDir`,
+  `claudeMd`, `embed`, and `retrieval` (incl. `categoryMap`/`overviewHeadingSuffix`).
+- **`config.json` `repos.checkouts: {<repoKey>: <absPath>}`** (gitignored) -- this machine's
+  checkout path for the repo. The only machine-local piece; everything else ships committed.
+
+`persistDir`/`collection` are **derived from `repoKey`** (`code_stores/<repoKey>` / `code_<repoKey>`),
+so two repos can't collide on a store. Every chunk is stamped `repo: <repoKey>` in its metadata
+(inert for retrieval today; forward-looking for a future shared code DB). Chunk metadata otherwise
+matches section 2a's schema exactly, so the produced index feeds the same index-mode retrieval.
+
+Ingest with `python -m lp_uworld_rag ingest-code --repo <repoKey> [--full]` (or `--all`). Delta is
+content-hash + prune keyed on file path; `--full` rebuilds. Node ids are byte-identical to a repo's
+prior in-tree tool output where the chunker is ported faithfully (reports migrated by *copying* its
+Chroma dir with zero re-embed, verified by 100% node-id parity).
+
+### Override ladder (per repo, both halves)
+
+Common code stays central; a repo can override just the piece it needs, via one `.py` loaded onto
+lp-uworld-rag's venv (importlib) -- never an in-repo tool:
+
+- **Ingestion** -- `ingest.json` `chunker`: **L0** a registered key (`"csharp"`, `"generic"`,
+  `"markdown"`); **L1** a dotted import path or `.py` file path to a `CodeReaderFactory`
+  (`create(root, source_dirs, exclude, **opts) -> reader.read_all() -> list[CodeChunk]`). The engine
+  still owns node-building, ids, embedding, persistence, and delta.
+- **Retrieval** -- `ingest.json` `retriever` (rides on the index block): **L0** omit -> built-in
+  `direct_index` engine; **L1** a dotted/`.py` path to a factory whose `create(persist_dir,
+  index_cfg)` returns an object with `query(question, top_k, file_hints) -> {chunks}`. Its output is
+  validated against the section-3 schema exactly like the built-in path, so the guardrails hold.
+- **L2 (either half)** -- serve mode, a wholly bespoke process (section 2b).
+
 ## Ownership & lifecycle
 
-*(Stub -- fill in as repos onboard.)* Each repo's own team owns its manifest, its server process,
-and its ingestion pipeline. Open questions not yet settled: who re-validates a repo's manifest
-after a code-RAG upgrade; where `known_risk`/`tracked_in` escalations get triaged; whether
+*(Stub -- fill in as repos onboard.)* A repo's committed spec (`repos/<repoKey>/ingest.json`) is
+owned jointly by that repo's team and whoever owns this contract; the checkout path is per-developer
+(gitignored). Open questions not yet settled: who re-runs `ingest-code` after a repo's source
+changes (a hook? CI? manual?); where `known_risk`/`tracked_in` escalations get triaged; whether
 onboarding a new repo needs a review from whoever owns this contract.

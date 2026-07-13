@@ -1,6 +1,13 @@
-"""Page/section -> one TextNode. No intra-page splitting -- see the plan's Document model section for
-why: every doc type in this Confluence space is already thin and single-purpose by authoring
-convention, so a whole page (or a whole ``### <ControllerName>`` section) is the right retrieval grain.
+"""Page/section -> one TextNode.
+
+WS4 (token-economy plan): endpoint and db-collection pages -- the two doc_types with rich, multi-
+``## heading`` bodies (Contract/Business rules/Flow/Gotchas; Document shape/Indexes/Constraints/
+Sample document) -- are now split section-by-section (see confluence_reader._split_page_sections),
+small-to-big like the code side's overview+per-method chunks: a short overview/Purpose parent plus
+one leaf node per remaining section, linked via ``parent_id``. Every other doc_type (feature-hub,
+technical-hub, controller-context, repo-registry) still gets one whole-page/whole-section node --
+they're already thin and single-purpose by authoring convention, so splitting them further would
+orphan content from its own context for no token benefit.
 
 A defensive size ceiling still applies -- real pages rarely approach it, but nothing here enforces
 thinness at ingest time, so a page that grows unexpectedly large gets truncated rather than blowing up
@@ -45,6 +52,17 @@ def _cap(text: str) -> str:
 
 def _compute_id(doc_type: str, key: str, text: str) -> str:
     return hashlib.sha256(f"{doc_type}|{key}|{text}".encode("utf-8")).hexdigest()[:24]
+
+
+def compute_id(doc_type: str, key: str, title: str, text: str) -> str:
+    """Public wrapper of the id scheme ``build_node`` uses internally (same ``_cap`` + hash), so a
+    caller (the section-splitter) can pre-compute a parent/overview node's id BEFORE its full
+    ``TextNode`` is built, to hand it to a child section as that child's ``parent_id`` -- the same
+    small-to-big need ReportsRagPy's code chunker has for its own overview/method split. Must be
+    called with the exact same ``doc_type``/``key``/``title``/``text`` the later ``build_node``
+    call for that same node uses, or the ids won't match."""
+    content = _cap(f"# {title}\n\n{text}".strip())
+    return _compute_id(doc_type, key, content)
 
 
 def build_node(text: str, title: str, key: str, doc_type: str, metadata: dict):

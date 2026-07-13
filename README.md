@@ -2,9 +2,13 @@
 
 Shared functional/technical RAG for the UWorld Learning Platform Confluence knowledge base --
 Feature Hubs, Technical Hubs, Endpoint Documents, Controller Context, and the Data Stores catalog.
-This project only reads Confluence itself -- it never imports another repo's code. It does,
-however, orchestrate across repos at query time: `deep_query` routes a doc hit to the repo(s) it's
-actually about and queries their own code-RAG MCP servers too (see "Cross-repo routing" below).
+It never imports another repo's code as a library. It does two things across repos:
+
+- **Ingests repo code centrally** -- a shared engine (`lp_uworld_rag/repo_ingest/`) builds each
+  repo's code index by being pointed at that repo's checkout, so a repo needs no in-tree RAG tool
+  of its own (see "Central code ingestion" below).
+- **Orchestrates at query time** -- `deep_query` routes a doc hit to the repo(s) it's actually
+  about and retrieves from their code index too (see "Cross-repo routing" below).
 
 ## Setup
 
@@ -31,6 +35,7 @@ python -m lp_uworld_rag query "POST faculty-led/group-performance" [--collection
 python -m lp_uworld_rag expand ctrl::reports::FacultyLedPerformanceController
 python -m lp_uworld_rag status
 python -m lp_uworld_rag mcp        # stdio MCP server for Claude Code / other agents
+python -m lp_uworld_rag ingest-code --repo reports [--full]   # ingest a repo's code (or --all)
 python -m lp_uworld_rag deep-query "why does POST faculty-led/group-performance return null body"
 python -m lp_uworld_rag query-code "group performance date range cap" --repo reports
 python -m lp_uworld_rag repos [--validate]
@@ -79,32 +84,55 @@ querying *every* registered repo with the raw question text, flagged via
 `query_code(question, repo=None, file_hints=None, top_k=None)` is a thin passthrough to one or
 every registered repo's code-RAG, with no docs stage.
 
-### Onboarding a repo
+## Central code ingestion
 
-Each repo owns its own ingestion (chunking, embedding, storage) completely -- this project only
-enforces the **retrieval interface** a repo's code-RAG must plug in through. That interface is
-frozen as the Repo RAG Retrieval Contract (v2): see [docs/repo-rag-contract.md](docs/repo-rag-contract.md).
-A manifest picks one of two modes (or both -- `index` wins when both are present):
+The code-ingestion engine lives **here**, in `lp_uworld_rag/repo_ingest/`, on this project's single
+venv -- a repo needs no RAG tool (venv, deps, ingest code) checked into its own tree. You point the
+engine at a repo's checkout and it builds that repo's code index.
 
-- **`index`** (recommended) -- the repo just ingests into a Chroma persist dir with the contract's
-  fixed metadata field names; the orchestrator reads it directly, in-process, via a generalized
-  retrieval engine (`lp_uworld_rag/direct_index.py`). No server to write or run -- the repo's own
-  RAG tool becomes mostly an ingestion pipeline (see `reports`' own `rag-manifest.json` for a
-  worked example).
-- **`serve`** -- the orchestrator spawns the repo's own MCP server and calls `query_rag`/
-  `rag_status`. Keep this as a fallback for a repo whose retrieval logic doesn't fit the generalized
-  engine (custom postprocessing, a non-Chroma store), or during migration to `index`.
+Repo-wise structure:
 
-To register a repo, add its `rag-manifest.json` path to `repos.manifests` in `config.json`, then
-run `python -m lp_uworld_rag repos --validate` to confirm it launches (or loads) and conforms
-before relying on it -- its output names which backend (`index`/`serve`) is actually in use.
+```
+lp-uworld-rag/
+  repos/                     # committed, ships with this project
+    common.json              #   shared defaults (embed model, retrieval/quotas, excludes)
+    <repoKey>/ingest.json    #   per-repo override (language, sourceDirs, ...); deep-merges over common
+  code_stores/<repoKey>/     # gitignored -- the built index (Chroma + docstore), derived from repoKey
+  config.json                # gitignored -- repos.checkouts: { "<repoKey>": "<abs path to checkout>" }
+  lp_uworld_rag/repo_ingest/ # the shared engine: pipeline + per-language chunker registry
+```
+
+To onboard a repo: add `repos/<repoKey>/ingest.json` (see `repos/reports/ingest.json`), set its
+checkout path under `repos.checkouts` in `config.json`, then:
+
+```
+python -m lp_uworld_rag ingest-code --repo <repoKey> [--full]   # or --all for every configured repo
+python -m lp_uworld_rag repos --validate                        # confirm it loads + conforms
+```
+
+Ingest is a content-hash **delta**: a re-run only re-embeds files whose chunks actually changed and
+prunes files that disappeared; `--full` rebuilds. `repoKey` **must equal** the `repo` value in the
+Confluence doc metadata (`ep::<repoKey>::...`) -- that's how the orchestrator routes a doc hit to
+this index.
+
+### Overriding the defaults
+
+Most repos need nothing beyond `ingest.json`. When a repo's needs exceed config, it can override one
+piece with a single `.py` module (loaded onto this venv -- still no in-tree tool), or run its own
+server -- see the override ladder (L0/L1/L2) and the frozen interface in
+[docs/repo-rag-contract.md](docs/repo-rag-contract.md):
+
+- **`chunker`** (in `ingest.json`) -- a custom chunker for a language/layout the built-ins don't fit.
+- **`retriever`** -- a custom retriever for a repo whose retrieval is too complex for config alone.
+- **serve mode** -- a wholly bespoke MCP server, for a repo that fits neither (the orchestrator
+  spawns it and calls `query_rag`/`rag_status`).
 
 `python -m lp_uworld_rag validate-citations` fact-checks every `File.cs:line` citation an ingested
-doc chunk carries against a registered repo's actual checkout (and, where the repo's code-RAG
-returns line ranges, against what it actually retrieves for that file) -- citations stay a rank
-boost everywhere else, this is the one place they're checked as fact.
+doc chunk carries against a registered repo's actual checkout (and, where the code index carries
+line ranges, against what it actually retrieves) -- citations stay a rank boost everywhere else,
+this is the one place they're checked as fact.
 
 ## Scope
 
-Read-only against Confluence. No code chunking of its own (that's each repo's own concern, see
-above), no swagger ingestion (contract content is authored directly in Endpoint Documents).
+Read-only against Confluence for docs. Code is ingested from a repo's checkout (never imported as a
+library); no swagger ingestion (contract content is authored directly in Endpoint Documents).

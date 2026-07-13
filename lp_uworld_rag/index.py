@@ -115,6 +115,22 @@ def _build_id_index(docstore) -> dict[str, list[str]]:
     return idx
 
 
+def _build_children_index(docstore) -> dict[str, list[str]]:
+    """WS4: map a section-split page's overview/parent node id -> its own leaf section node ids
+    (the reverse of each leaf's own ``parent_id``), so a hit on the OVERVIEW can cite its sections
+    ("there's more -- Contract, Flow, Gotchas exist, call expand() on the one you need") the same
+    way a hit on a LEAF cites its overview. Built once per cache lifetime; a page with no sections
+    (whole-page fallback, or any doc_type WS4 doesn't split) simply has no entry here."""
+    children: dict[str, list[str]] = {}
+    if docstore is None:
+        return children
+    for node_id, doc in docstore.docs.items():
+        parent_id = (doc.metadata or {}).get("parent_id")
+        if parent_id:
+            children.setdefault(parent_id, []).append(node_id)
+    return children
+
+
 class RetrieverCache:
     """The expensive, question-independent pieces of retrieval, built once and reused across many
     query()/expand() calls in one process (the MCP server's whole session lifetime)."""
@@ -134,6 +150,7 @@ class RetrieverCache:
             else:
                 self.bm25[c] = None
         self.id_index = {c: _build_id_index(self.docstores[c]) for c in COLLECTIONS}
+        self.children_of = {c: _build_children_index(self.docstores[c]) for c in COLLECTIONS}
         self.reranker = None
         if cfg.rerank.enabled:
             from llama_index.core.postprocessor import SentenceTransformerRerank
@@ -236,9 +253,16 @@ def _maybe_rerank(cfg: RagConfig, question: str, results: list, cache: Retriever
     return reranker.postprocess_nodes(results, QueryBundle(query_str=question))
 
 
-def _resolve_citations(node_md: dict, collection: str, cache: RetrieverCache, exclude_ids: set) -> list[dict]:
+def _resolve_citations(node_md: dict, node_id: str, collection: str, cache: RetrieverCache,
+                        exclude_ids: set) -> list[dict]:
     """A hit's linked-but-not-independently-retrieved nodes, as {id, title, doc_type} only -- never
-    inlined full text (see the plan's Document model: cite, don't inline)."""
+    inlined full text (see the plan's Document model: cite, don't inline).
+
+    WS4 adds the section small-to-big join, symmetric in both directions: a LEAF section hit (has
+    its own ``parent_id``) cites its overview; an OVERVIEW hit cites its own leaf sections (via
+    ``cache.children_of``) -- "there's more: Contract, Flow, Gotchas exist" -- so a caller sees a
+    section-split page's other parts exist without them ever being inlined.
+    """
     idx = cache.id_index[collection]
     docstore = cache.docstores[collection]
     if docstore is None:
@@ -260,15 +284,37 @@ def _resolve_citations(node_md: dict, collection: str, cache: RetrieverCache, ex
     citations = []
     seen = set()
     for key in candidate_keys:
-        for node_id in idx.get(key, []):
-            if node_id in exclude_ids or node_id in seen:
+        for nid in idx.get(key, []):
+            if nid in exclude_ids or nid in seen:
                 continue
-            seen.add(node_id)
-            doc = docstore.docs.get(node_id)
+            seen.add(nid)
+            doc = docstore.docs.get(nid)
             if doc is None:
                 continue
             md = doc.metadata or {}
             citations.append({"id": key, "title": md.get("title"), "doc_type": md.get("doc_type")})
+
+    # WS4: parent (leaf -> its overview) and children (overview -> its leaf sections) are looked up
+    # by raw node id directly, not through the stable-id index above -- a section has no stable id
+    # of its own distinct from its endpoint_id/db_id (it shares its page's), so "the id I'd look up"
+    # and "the node I actually mean" aren't the same thing the way they are for controller/db/feature.
+    related_node_ids: list[str] = []
+    parent_id = node_md.get("parent_id")
+    if parent_id:
+        related_node_ids.append(parent_id)
+    related_node_ids.extend(cache.children_of[collection].get(node_id, []))
+
+    for nid in related_node_ids:
+        if nid in exclude_ids or nid in seen:
+            continue
+        seen.add(nid)
+        doc = docstore.docs.get(nid)
+        if doc is None:
+            continue
+        md = doc.metadata or {}
+        stable_id = md.get("endpoint_id") or md.get("db_id") or md.get("page_id")
+        citations.append({"id": stable_id, "title": md.get("title"), "doc_type": md.get("doc_type")})
+
     return citations
 
 
@@ -322,7 +368,7 @@ def query(cfg: RagConfig, question: str, collection: str | None = None, top_k: i
             "score": round(float(r.score), 6) if r.score is not None else None,
         }
         if include_siblings:
-            entry["citations"] = _resolve_citations(md, c, cache, hit_ids)
+            entry["citations"] = _resolve_citations(md, r.node.id_, c, cache, hit_ids)
         chunks.append(entry)
 
     return {"chunks": chunks}
