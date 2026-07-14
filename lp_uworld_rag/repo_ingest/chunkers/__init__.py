@@ -10,10 +10,9 @@ Resolution (``get_chunker``) is the ingestion half of the per-repo override ladd
 """
 from __future__ import annotations
 
-import importlib
-import importlib.util
 from pathlib import Path
 
+from ..._overrides import load_factory
 from .base import Chunker, ChunkerFactory, CodeChunk  # re-exported
 from .csharp import CSharpChunkerFactory
 from .generic import GenericChunkerFactory
@@ -36,33 +35,10 @@ def registered_keys() -> list[str]:
 
 
 def _load_override(spec: str) -> ChunkerFactory:
-    """Import an L1 override. ``spec`` is either a ``.py`` file path, or a dotted module path with
-    an optional ``:attr`` (defaults to a module-level ``factory`` or ``get_factory()``)."""
-    attr = None
-    if ":" in spec and not Path(spec).exists():
-        spec, attr = spec.rsplit(":", 1)
-
-    if spec.endswith(".py") or ("/" in spec) or ("\\" in spec):
-        path = Path(spec).resolve()
-        if not path.exists():
-            raise RuntimeError(f"chunker override file not found: {path}")
-        mod_spec = importlib.util.spec_from_file_location(f"_repo_chunker_{path.stem}", path)
-        module = importlib.util.module_from_spec(mod_spec)
-        mod_spec.loader.exec_module(module)
-    else:
-        module = importlib.import_module(spec)
-
-    if attr:
-        factory = getattr(module, attr)
-    elif hasattr(module, "factory"):
-        factory = module.factory
-    elif hasattr(module, "get_factory"):
-        factory = module.get_factory()
-    else:
-        raise RuntimeError(
-            f"chunker override {spec!r} exposes neither a module-level 'factory' nor 'get_factory()'"
-        )
-    factory = factory() if isinstance(factory, type) else factory
+    """Import an L1 override (shared resolver in ``_overrides.load_factory``) and confirm it's a
+    :class:`ChunkerFactory`. ``spec`` is either a ``.py`` file path, or a dotted module path with an
+    optional ``:attr`` (defaults to a module-level ``factory`` or ``get_factory()``)."""
+    factory = load_factory(spec, "chunker")
     if not hasattr(factory, "create"):
         raise RuntimeError(f"chunker override {spec!r} is not a ChunkerFactory (no .create method)")
     return factory

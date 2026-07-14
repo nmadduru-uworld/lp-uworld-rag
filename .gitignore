@@ -6,3 +6,5 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/
+# Office (PowerPoint/Word) owner/lock temp files
+~$*

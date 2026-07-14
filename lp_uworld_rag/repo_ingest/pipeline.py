@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -118,26 +117,15 @@ def _save_state(persist_dir: Path, files: dict[str, list[str]]) -> None:
     _state_path(persist_dir).write_text(json.dumps({"files": files}, indent=2), encoding="utf-8")
 
 
-def _persist_docstore(persist_dir: Path, nodes: list) -> None:
-    """Full rebuild each run -- ``nodes`` is the complete current corpus, so BM25's docstore is just
-    the current truth (mirrors ``ingest._persist_docstore``)."""
-    from llama_index.core.storage.docstore import SimpleDocumentStore
-
-    ds = SimpleDocumentStore()
-    ds.add_documents(nodes)
-    dir_ = persist_dir / "docstore"
-    dir_.mkdir(parents=True, exist_ok=True)
-    ds.persist(str(dir_ / "docstore.json"))
-
-
 def run_code_ingest(job: IngestJob, full: bool = False) -> int:
     """Ingest one repo. Returns the collection's final chunk count."""
-    import chromadb
     from collections import Counter
     from llama_index.core import StorageContext, VectorStoreIndex
     from llama_index.vector_stores.chroma import ChromaVectorStore
 
+    from .. import store_sync
     from ..direct_index import get_embed_model
+    from ..retrieval_engine import open_chroma_client
 
     print(f"[ingest-code] {job.repo_key}: building nodes from {job.checkout_path} …")
     nodes = _build_nodes(job)
@@ -149,37 +137,13 @@ def run_code_ingest(job: IngestJob, full: bool = False) -> int:
         nodes_by_file.setdefault(n.metadata.get("file_path", ""), []).append(n)
 
     job.persist_dir.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(job.persist_dir))
+    client = open_chroma_client(str(job.persist_dir))
     if full:
-        try:
-            client.delete_collection(job.collection)
-        except Exception:
-            pass
+        store_sync.drop_collection(client, job.collection)
     coll = client.get_or_create_collection(job.collection)
 
-    state = {"files": {}} if full else _load_state(job.persist_dir)
-    prev = state.get("files", {})
-    new_ids: dict[str, list[str]] = {}
-    to_embed = []
-    for file_path, fnodes in nodes_by_file.items():
-        cur = sorted(n.id_ for n in fnodes)
-        new_ids[file_path] = cur
-        if not full and prev.get(file_path) == cur:
-            continue  # unchanged -- skip re-embedding
-        old = prev.get(file_path, [])
-        if old:
-            try:
-                coll.delete(ids=old)
-            except Exception:
-                pass
-        to_embed.extend(fnodes)
-
-    removed = set(prev) - set(new_ids)
-    for file_path in removed:
-        try:
-            coll.delete(ids=prev[file_path])
-        except Exception:
-            pass
+    prev = ({"files": {}} if full else _load_state(job.persist_dir)).get("files", {})
+    to_embed, new_ids, removed = store_sync.delta_sync(coll, nodes_by_file, prev, full)
 
     print(f"[ingest-code] embedding {len(to_embed)} new/changed chunks "
           f"({len(removed)} file(s) removed) …")
@@ -189,7 +153,7 @@ def run_code_ingest(job: IngestJob, full: bool = False) -> int:
         storage = StorageContext.from_defaults(vector_store=vstore)
         VectorStoreIndex(to_embed, storage_context=storage, embed_model=embed, show_progress=True)
 
-    _persist_docstore(job.persist_dir, nodes)
+    store_sync.persist_docstore(nodes, job.persist_dir / "docstore")
     _save_state(job.persist_dir, new_ids)
     print(f"[ingest-code] done. collection '{job.collection}' now has {coll.count()} chunks.")
     return coll.count()

@@ -10,7 +10,33 @@ It never imports another repo's code as a library. It does two things across rep
 - **Orchestrates at query time** -- `deep_query` routes a doc hit to the repo(s) it's actually
   about and retrieves from their code index too (see "Cross-repo routing" below).
 
+> **New here?** Start with **[docs/getting-started.md](docs/getting-started.md)** — a plain-language
+> tour (what/why, glossary, how it works end to end, the three tiers, config reference,
+> troubleshooting, "how do I know it worked"). There's also a slide deck under
+> [`presentation/`](presentation/) (`lp-uworld-rag-pitch.pptx`, or the rendered
+> `presentation/slides/slide-01.png`…`slide-16.png`).
+
 ## Setup
+
+### Quick start (one command)
+
+From a PowerShell prompt in the repo root (a Confluence API token comes from
+https://id.atlassian.com/manage-profile/security/api-tokens):
+
+```
+.\setup.ps1 -Email you@uworld.com -Token <token>
+```
+
+That single command creates the `.venv`, `pip install -e .`, copies `config.json` from the example,
+sets the two Confluence env vars (persisted to your user environment **and** the current session --
+your token is never written to any file in the repo), ingests the Confluence docs, ingests every
+configured repo's code (`ingest-code --all`), then runs `repos --validate` and `status`. It's
+idempotent: re-running skips venv creation, never clobbers an existing `config.json`, and the delta
+ingest only re-embeds what changed. Flags: `-Full` (rebuild from scratch), `-SkipCode` (docs only --
+use on a machine without the repo checkouts), `-DryRun` (print the steps without running them).
+Omit `-Email`/`-Token` to be prompted (token input hidden).
+
+### Manual setup
 
 ```
 python -m venv .venv
@@ -45,6 +71,40 @@ python -m lp_uworld_rag validate-citations
 `docs_functional` is expected to be **empty** until Feature Hub pages actually exist in Confluence --
 both are 404 as of this project's creation; the Technical Hub pages that link to them say so
 explicitly ("functional hub -- link pending").
+
+## Project layout
+
+Every module under `lp_uworld_rag/`, by role:
+
+| Module | What it does |
+| --- | --- |
+| **Entry / config** | |
+| `__main__.py` | CLI verbs + dispatch (`ingest`, `query`, `deep-query`, `ingest-code`, `repos`, …) |
+| `config.py` | Typed (`pydantic`) load of `config.json` -- embed/store/collections/retrieval/rerank/confluence/repos |
+| `mcp_server.py` | FastMCP stdio server exposing `query_rag`/`expand`/`deep_query`/`query_code`/`rag_status` |
+| **Docs pipeline** | |
+| `confluence_client.py` | Confluence Cloud REST v2 client (children, body → markdown) |
+| `confluence_reader.py` | Crawl the two Confluence trees, parse metadata, classify doc_type, section-split |
+| `chunker.py` | One capped, Chroma-safe `TextNode` per page/section (content-hash id) |
+| `ingest.py` | Crawl → chunk → content-hash **delta** upsert into `docs_functional` + `docs_technical` |
+| **Retrieval** | |
+| `retrieval_engine.py` | **Shared primitives** -- embed model, Chroma client, docstore, BM25, fusion retriever, rerank (used by both engines below) |
+| `index.py` | Docs engine: retrieve → resolve linked ids as citations → quota/rerank/rank |
+| `direct_index.py` | Generalized "index"-mode engine reading a repo's own Chroma store (hint-boost, priority order, small-to-big parent join) |
+| `orchestrator.py` | `deep_query`/`query_code`: docs → route by stable-id → each routed repo's code-RAG; score floor + token budget |
+| `tokens.py` | One `count_tokens` (tiktoken `cl100k_base`) shared by `eval` + `orchestrator` |
+| **Repo plug-in** | |
+| `repo_registry.py` | Load repo manifests; run each via `serve` (MCP subprocess) or `index` (in-process); conformance validation |
+| `repo_ingest/` | Central code ingestion: `spec.py` (per-repo spec deep-merge), `pipeline.py` (checkout → chunks → Chroma), `layer.py`, `chunkers/*` (C#/markdown/generic registry) |
+| `_overrides.py` | Shared L1-override `importlib` loader behind the chunker + retriever override seams |
+| **Quality** | |
+| `eval.py` | 5-tier eval **harness/engine** (metadata integrity, resolve, retrieval quality, expand, routing) |
+| `eval_cases.py` | The domain-specific query/expand/routing **fixtures** the harness runs (kept out of the harness so it stays domain-agnostic) |
+
+`retrieval_engine.py` and `tokens.py` exist to remove duplication: the two retrieval engines used to
+reimplement the same embed/Chroma/BM25/rerank plumbing, and the token counter lived in two places.
+See [docs/repo-rag-contract.md](docs/repo-rag-contract.md) for the interface a repo's code-RAG plugs
+in through.
 
 ## How results are shaped: citations, not inlined content
 

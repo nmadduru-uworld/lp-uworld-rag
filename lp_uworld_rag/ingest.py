@@ -57,64 +57,31 @@ def _embed_and_upsert(cfg: RagConfig, nodes: list, collection_obj, collection: s
     VectorStoreIndex(nodes, storage_context=storage, embed_model=embed, show_progress=True)
 
 
-def _persist_docstore(cfg: RagConfig, collection: str, nodes: list) -> None:
-    """Full rebuild each run -- ``nodes`` already reflects this collection's complete current live
-    corpus (read_all always fetches every page's body), so BM25's docstore is simply the current
-    truth, not something to patch incrementally."""
-    from llama_index.core.storage.docstore import SimpleDocumentStore
-
-    ds = SimpleDocumentStore()
-    ds.add_documents(nodes)
-    dir_ = _docstore_dir(cfg, collection)
-    os.makedirs(dir_, exist_ok=True)
-    ds.persist(os.path.join(dir_, "docstore.json"))
-
-
 def _sync_collection(cfg: RagConfig, collection: str, collection_pages: list[dict],
                       page_nodes: dict[str, list], full: bool) -> int:
     """Delta-sync one collection against its own Chroma client and its own state file -- entirely
-    independent of the other collection's sync. Returns the collection's final chunk count."""
-    import chromadb
-
-    from .index import get_collection
+    independent of the other collection's sync. Returns the collection's final chunk count. The
+    delta mechanics (skip-unchanged/prune/docstore-rebuild) live in ``store_sync``, shared with the
+    code ingest; only this collection's state-file schema (the extra ``pages`` version map) is local."""
+    from . import store_sync
+    from .index import get_chroma_client, get_collection
 
     state = {"pages": {}, "nodeIds": {}} if full else _load_state(cfg, collection)
     prev_node_ids: dict[str, list[str]] = state.get("nodeIds", {})
-    new_node_ids: dict[str, list[str]] = {}
-    to_embed = []
 
-    client = chromadb.PersistentClient(path=_abs(cfg, cfg.persist_dir(collection)))
+    client = get_chroma_client(cfg, collection)
     if full:
-        try:
-            client.delete_collection(cfg.collection_name(collection))
-        except Exception:
-            pass
+        store_sync.drop_collection(client, cfg.collection_name(collection))
     coll = get_collection(cfg, client, collection)
 
-    for page_id, nodes in page_nodes.items():
-        cur_ids = sorted(n.id_ for n in nodes)
-        new_node_ids[page_id] = cur_ids
-        if not full and prev_node_ids.get(page_id) == cur_ids:
-            continue  # content unchanged -- skip re-embedding
-        old_ids = prev_node_ids.get(page_id, [])
-        if old_ids:
-            try:
-                coll.delete(ids=old_ids)
-            except Exception:
-                pass
-        to_embed.extend(nodes)
-
-    removed_page_ids = set(prev_node_ids) - set(new_node_ids)
-    for page_id in removed_page_ids:
-        try:
-            coll.delete(ids=prev_node_ids[page_id])
-        except Exception:
-            pass
+    to_embed, new_node_ids, removed_page_ids = store_sync.delta_sync(
+        coll, page_nodes, prev_node_ids, full)
 
     print(f"[ingest] {collection}: embedding {len(to_embed)} new/changed chunks "
           f"({len(removed_page_ids)} page(s) removed) …")
     _embed_and_upsert(cfg, to_embed, coll, collection)
-    _persist_docstore(cfg, collection, [n for nodes in page_nodes.values() for n in nodes])
+    store_sync.persist_docstore([n for nodes in page_nodes.values() for n in nodes],
+                                 Path(_docstore_dir(cfg, collection)))
 
     _save_state(cfg, collection, {
         "pages": {p["id"]: {"version": p["version"], "parentId": p.get("parentId")}

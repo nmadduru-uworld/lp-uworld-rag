@@ -10,8 +10,6 @@ model / index load cost on every query).
 from __future__ import annotations
 
 import asyncio
-import importlib
-import importlib.util
 import json
 import re
 import threading
@@ -20,6 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
+from ._overrides import load_factory
 from .direct_index import IndexConfig
 
 # v1: manifest must declare "serve" (spawn an MCP server) -- the only mode that existed at first.
@@ -260,31 +259,12 @@ class _DefaultRetriever:
 
 
 def _load_retriever_factory(spec: str):
-    """Import an L1 retriever override (same resolution as chunker overrides): a ``.py`` file path,
-    or a dotted module path with optional ``:attr`` (defaults to module-level ``factory`` /
-    ``get_factory()``). The factory's ``create(persist_dir, index_cfg)`` must return an object with a
-    ``query(question, top_k, file_hints) -> dict`` method."""
-    attr = None
-    if ":" in spec and not Path(spec).exists():
-        spec, attr = spec.rsplit(":", 1)
-    if spec.endswith(".py") or ("/" in spec) or ("\\" in spec):
-        path = Path(spec).resolve()
-        if not path.exists():
-            raise RuntimeError(f"retriever override file not found: {path}")
-        mod_spec = importlib.util.spec_from_file_location(f"_repo_retriever_{path.stem}", path)
-        module = importlib.util.module_from_spec(mod_spec)
-        mod_spec.loader.exec_module(module)
-    else:
-        module = importlib.import_module(spec)
-    if attr:
-        factory = getattr(module, attr)
-    elif hasattr(module, "factory"):
-        factory = module.factory
-    elif hasattr(module, "get_factory"):
-        factory = module.get_factory()
-    else:
-        raise RuntimeError(f"retriever override {spec!r} exposes neither 'factory' nor 'get_factory()'")
-    return factory() if isinstance(factory, type) else factory
+    """Import an L1 retriever override via the shared resolver (``_overrides.load_factory``, same
+    resolution as chunker overrides): a ``.py`` file path, or a dotted module path with optional
+    ``:attr`` (defaults to module-level ``factory`` / ``get_factory()``). The factory's
+    ``create(persist_dir, index_cfg)`` must return an object with a
+    ``query(question, top_k, file_hints) -> dict`` method (validated in ``get_retriever``)."""
+    return load_factory(spec, "retriever")
 
 
 def get_retriever(retriever_spec: str | None, persist_dir: Path, index_cfg: IndexConfig):

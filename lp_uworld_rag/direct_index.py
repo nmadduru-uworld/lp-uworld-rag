@@ -20,6 +20,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from . import retrieval_engine
+
 
 class IndexEmbedConfig(BaseModel):
     model: str
@@ -69,26 +71,13 @@ class IndexConfig(BaseModel):
     retriever: str | None = None
 
 
-def _resolve_device(cfg: IndexEmbedConfig) -> str:
-    if cfg.device and cfg.device != "auto":
-        return cfg.device
-    try:
-        import torch
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
-
-
 def get_embed_model(cfg: IndexEmbedConfig):
-    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-
-    return HuggingFaceEmbedding(
-        model_name=cfg.model,
+    return retrieval_engine.build_embed_model(
+        model=cfg.model,
         trust_remote_code=cfg.trustRemoteCode,
-        query_instruction=cfg.queryPrefix,
-        text_instruction=cfg.textPrefix,
-        device=_resolve_device(cfg),
-        normalize=True,
+        query_prefix=cfg.queryPrefix,
+        text_prefix=cfg.textPrefix,
+        device=cfg.device,
     )
 
 
@@ -97,22 +86,11 @@ def _docstore_dir(persist_dir: Path) -> Path:
 
 
 def _load_docstore(persist_dir: Path):
-    from llama_index.core.storage.docstore import SimpleDocumentStore
-
-    path = _docstore_dir(persist_dir) / "docstore.json"
-    if not path.exists():
-        return None
-    return SimpleDocumentStore.from_persist_path(str(path))
+    return retrieval_engine.load_docstore(str(_docstore_dir(persist_dir) / "docstore.json"))
 
 
 def load_index(persist_dir: Path, collection: str, embed_model):
-    import chromadb
-    from llama_index.core import VectorStoreIndex
-    from llama_index.vector_stores.chroma import ChromaVectorStore
-
-    client = chromadb.PersistentClient(path=str(persist_dir))
-    vstore = ChromaVectorStore(chroma_collection=client.get_or_create_collection(collection))
-    return VectorStoreIndex.from_vector_store(vstore, embed_model=embed_model)
+    return retrieval_engine.load_vector_index(str(persist_dir), collection, embed_model)
 
 
 class RetrieverCache:
@@ -130,9 +108,8 @@ class RetrieverCache:
         self.docstore = _load_docstore(persist_dir)
         self.bm25 = None
         if self.docstore is not None:
-            from llama_index.retrievers.bm25 import BM25Retriever
-            pool_size = max(index_cfg.retrieval.poolSize, index_cfg.retrieval.topK)
-            self.bm25 = BM25Retriever.from_defaults(docstore=self.docstore, similarity_top_k=pool_size)
+            pool_size = retrieval_engine.pool_size(index_cfg.retrieval.poolSize, index_cfg.retrieval.topK)
+            self.bm25 = retrieval_engine.build_bm25(self.docstore, pool_size)
 
 
 def build_retriever_cache(persist_dir: Path, index_cfg: IndexConfig) -> RetrieverCache:
@@ -141,20 +118,10 @@ def build_retriever_cache(persist_dir: Path, index_cfg: IndexConfig) -> Retrieve
 
 def _build_retriever(retrieval_cfg: IndexRetrievalConfig, top_k: int, cache: RetrieverCache):
     vector_retriever = cache.vindex.as_retriever(similarity_top_k=top_k)
-    if cache.bm25 is None:
-        return vector_retriever  # vector-only until this repo's ingest has persisted a docstore
-
-    from llama_index.core.llms import MockLLM
-    from llama_index.core.retrievers import QueryFusionRetriever
-
-    return QueryFusionRetriever(
-        [vector_retriever, cache.bm25],
-        mode=retrieval_cfg.fusionMode,
-        num_queries=retrieval_cfg.numQueries,  # 1 -> no query generation, no LLM call
-        similarity_top_k=top_k,
-        use_async=False,
-        llm=MockLLM(),
-    )
+    # bm25 None here (no persisted docstore yet) -> build_fusion_retriever returns vector-only.
+    return retrieval_engine.build_fusion_retriever(
+        vector_retriever, cache.bm25,
+        top_k=top_k, fusion_mode=retrieval_cfg.fusionMode, num_queries=retrieval_cfg.numQueries)
 
 
 def _category(node_with_score, retrieval_cfg: IndexRetrievalConfig) -> str:
@@ -239,11 +206,7 @@ def _apply_hint_boost(retrieval_cfg: IndexRetrievalConfig, results: list, file_h
 def _maybe_rerank(retrieval_cfg: IndexRetrievalConfig, question: str, results: list) -> list:
     if not retrieval_cfg.rerankEnabled or not results:
         return results
-    from llama_index.core.postprocessor import SentenceTransformerRerank
-    from llama_index.core.schema import QueryBundle
-
-    reranker = SentenceTransformerRerank(model=retrieval_cfg.rerankModel, top_n=len(results))
-    return reranker.postprocess_nodes(results, QueryBundle(query_str=question))
+    return retrieval_engine.rerank(question, results, model=retrieval_cfg.rerankModel)
 
 
 def query(persist_dir: Path, index_cfg: IndexConfig, question: str, top_k: int | None = None,
@@ -253,7 +216,7 @@ def query(persist_dir: Path, index_cfg: IndexConfig, question: str, top_k: int |
     retrieval_cfg = index_cfg.retrieval
     cache = cache or build_retriever_cache(persist_dir, index_cfg)
     top_k = top_k or retrieval_cfg.topK
-    pool_size = max(retrieval_cfg.poolSize, top_k)
+    pool_size = retrieval_engine.pool_size(retrieval_cfg.poolSize, top_k)
 
     retriever = _build_retriever(retrieval_cfg, pool_size, cache)
     results = retriever.retrieve(question)
@@ -276,7 +239,7 @@ def query(persist_dir: Path, index_cfg: IndexConfig, question: str, top_k: int |
             "layer": md.get("layer"),  # None on non-code chunks (e.g. rules) -- contract allows null
             "filePath": md.get("file_path"),
             "content": r.node.get_content(),
-            "score": round(float(r.score), 6) if r.score is not None else None,
+            "score": retrieval_engine.round_score(r.score),
         }
         if md.get("start_line"):
             entry["startLine"] = md["start_line"]
@@ -297,10 +260,7 @@ def query(persist_dir: Path, index_cfg: IndexConfig, question: str, top_k: int |
 def status(persist_dir: Path, index_cfg: IndexConfig) -> str:
     """Chunk counts grouped by (layer, source_type) from the Chroma collection -- no cache
     required, this is a liveness/count check, not a query."""
-    import chromadb
-
-    client = chromadb.PersistentClient(path=str(persist_dir))
-    collection = client.get_or_create_collection(index_cfg.store.collection)
+    collection = retrieval_engine.open_chroma_collection(str(persist_dir), index_cfg.store.collection)
     total = collection.count()
     if total == 0:
         return f"{index_cfg.store.collection}: index empty"

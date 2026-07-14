@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import os
 from collections import Counter
-from pathlib import Path
 
+from . import retrieval_engine
 from .chunker import decode_list_field
 from .config import RagConfig
 
@@ -30,35 +30,21 @@ def _docstore_dir(cfg: RagConfig, collection: str) -> str:
     return _abs(cfg, os.path.join(cfg.persist_dir(collection), "docstore"))
 
 
-def _resolve_device(cfg: RagConfig) -> str:
-    if cfg.embed.device and cfg.embed.device != "auto":
-        return cfg.embed.device
-    try:
-        import torch
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
-
-
 def get_embed_model(cfg: RagConfig, collection: str):
     """nomic HuggingFace embedding (or a per-collection override) with asymmetric task prefixes."""
-    from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-
-    return HuggingFaceEmbedding(
-        model_name=cfg.embed_model_name(collection),
+    return retrieval_engine.build_embed_model(
+        model=cfg.embed_model_name(collection),
         trust_remote_code=cfg.embed.trustRemoteCode,
-        query_instruction=cfg.embed.queryPrefix,
-        text_instruction=cfg.embed.textPrefix,
-        device=_resolve_device(cfg),
-        normalize=True,
+        query_prefix=cfg.embed.queryPrefix,
+        text_prefix=cfg.embed.textPrefix,
+        device=cfg.embed.device,
     )
 
 
 def get_chroma_client(cfg: RagConfig, collection: str):
     """Each collection gets its own PersistentClient -- two independent local databases, not two
     collections sharing one client (see StoreConfig / RagConfig.persist_dir)."""
-    import chromadb
-    return chromadb.PersistentClient(path=_abs(cfg, cfg.persist_dir(collection)))
+    return retrieval_engine.open_chroma_client(_abs(cfg, cfg.persist_dir(collection)))
 
 
 def get_collection(cfg: RagConfig, client, collection: str):
@@ -66,22 +52,13 @@ def get_collection(cfg: RagConfig, client, collection: str):
 
 
 def load_index(cfg: RagConfig, collection: str, embed_model=None):
-    from llama_index.core import VectorStoreIndex
-    from llama_index.vector_stores.chroma import ChromaVectorStore
-
     embed_model = embed_model or get_embed_model(cfg, collection)
-    client = get_chroma_client(cfg, collection)
-    vstore = ChromaVectorStore(chroma_collection=get_collection(cfg, client, collection))
-    return VectorStoreIndex.from_vector_store(vstore, embed_model=embed_model)
+    return retrieval_engine.load_vector_index(
+        _abs(cfg, cfg.persist_dir(collection)), cfg.collection_name(collection), embed_model)
 
 
 def _load_docstore(cfg: RagConfig, collection: str):
-    from llama_index.core.storage.docstore import SimpleDocumentStore
-
-    path = os.path.join(_docstore_dir(cfg, collection), "docstore.json")
-    if not os.path.exists(path):
-        return None
-    return SimpleDocumentStore.from_persist_path(path)
+    return retrieval_engine.load_docstore(os.path.join(_docstore_dir(cfg, collection), "docstore.json"))
 
 
 def _build_id_index(docstore) -> dict[str, list[str]]:
@@ -140,15 +117,10 @@ class RetrieverCache:
         self.embed_models = {c: get_embed_model(cfg, c) for c in COLLECTIONS}
         self.vindexes = {c: load_index(cfg, c, embed_model=self.embed_models[c]) for c in COLLECTIONS}
         self.docstores = {c: _load_docstore(cfg, c) for c in COLLECTIONS}
-        pool_size = max(cfg.retrieval.poolSize, cfg.retrieval.topK)
-        self.bm25 = {}
-        for c in COLLECTIONS:
-            ds = self.docstores[c]
-            if ds is not None:
-                from llama_index.retrievers.bm25 import BM25Retriever
-                self.bm25[c] = BM25Retriever.from_defaults(docstore=ds, similarity_top_k=pool_size)
-            else:
-                self.bm25[c] = None
+        pool_size = retrieval_engine.pool_size(cfg.retrieval.poolSize, cfg.retrieval.topK)
+        self.bm25 = {c: (retrieval_engine.build_bm25(self.docstores[c], pool_size)
+                         if self.docstores[c] is not None else None)
+                     for c in COLLECTIONS}
         self.id_index = {c: _build_id_index(self.docstores[c]) for c in COLLECTIONS}
         self.children_of = {c: _build_children_index(self.docstores[c]) for c in COLLECTIONS}
         self.reranker = None
@@ -165,21 +137,10 @@ def build_retriever_cache(cfg: RagConfig) -> RetrieverCache:
 
 def _build_retriever(cfg: RagConfig, collection: str, top_k: int, cache: RetrieverCache):
     vector_retriever = cache.vindexes[collection].as_retriever(similarity_top_k=top_k)
-    bm25 = cache.bm25[collection]
-    if bm25 is None:
-        return vector_retriever  # vector-only until an ingest has persisted this collection's docstore
-
-    from llama_index.core.llms import MockLLM
-    from llama_index.core.retrievers import QueryFusionRetriever
-
-    return QueryFusionRetriever(
-        [vector_retriever, bm25],
-        mode=cfg.retrieval.fusionMode,
-        num_queries=cfg.retrieval.numQueries,  # 1 -> no query generation, no LLM call
-        similarity_top_k=top_k,
-        use_async=False,
-        llm=MockLLM(),
-    )
+    # bm25 None here (no persisted docstore yet) -> build_fusion_retriever returns vector-only.
+    return retrieval_engine.build_fusion_retriever(
+        vector_retriever, cache.bm25[collection],
+        top_k=top_k, fusion_mode=cfg.retrieval.fusionMode, num_queries=cfg.retrieval.numQueries)
 
 
 def _apply_quota(cfg: RagConfig, results: list, top_k: int) -> list:
@@ -242,15 +203,10 @@ def _normalize_scores(results: list) -> list:
 def _maybe_rerank(cfg: RagConfig, question: str, results: list, cache: RetrieverCache | None = None) -> list:
     if not cfg.rerank.enabled or not results:
         return results
-    from llama_index.core.schema import QueryBundle
-
-    if cache is not None and cache.reranker is not None:
-        reranker = cache.reranker
-    else:
-        # No cache (e.g. a one-off call) -- build one-shot rather than reuse a stale instance.
-        from llama_index.core.postprocessor import SentenceTransformerRerank
-        reranker = SentenceTransformerRerank(model=cfg.rerank.model, top_n=len(results))
-    return reranker.postprocess_nodes(results, QueryBundle(query_str=question))
+    # Reuse the cache's pool-sized reranker when present; else build_engine builds a one-shot sized
+    # to this call rather than reuse a stale instance.
+    reranker = cache.reranker if (cache is not None and cache.reranker is not None) else None
+    return retrieval_engine.rerank(question, results, reranker=reranker, model=cfg.rerank.model)
 
 
 def _resolve_citations(node_md: dict, node_id: str, collection: str, cache: RetrieverCache,
@@ -328,7 +284,7 @@ def query(cfg: RagConfig, question: str, collection: str | None = None, top_k: i
     """
     cache = cache or build_retriever_cache(cfg)
     top_k = top_k or cfg.retrieval.topK
-    pool_size = max(cfg.retrieval.poolSize, top_k)
+    pool_size = retrieval_engine.pool_size(cfg.retrieval.poolSize, top_k)
     collections = [collection] if collection else list(COLLECTIONS)
 
     pooled = []
@@ -365,7 +321,7 @@ def query(cfg: RagConfig, question: str, collection: str | None = None, top_k: i
             "docType": md.get("doc_type"),
             "collection": c,
             "content": r.node.get_content(),
-            "score": round(float(r.score), 6) if r.score is not None else None,
+            "score": retrieval_engine.round_score(r.score),
         }
         if include_siblings:
             entry["citations"] = _resolve_citations(md, r.node.id_, c, cache, hit_ids)

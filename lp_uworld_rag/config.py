@@ -18,7 +18,6 @@ class EmbedConfig(BaseModel):
     # nomic requires asymmetric task prefixes for good doc/query separation.
     queryPrefix: str = "search_query: "
     textPrefix: str = "search_document: "
-    dim: int = 768
     device: str = "auto"  # "auto" -> cuda if available else cpu; or force "cuda"/"cpu"
 
 
@@ -66,7 +65,6 @@ class RerankConfig(BaseModel):
     strong next to a 20-document pool's real rank-1). Quota alone doesn't fix this; rerank does."""
     enabled: bool = True
     model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    candidatePoolCap: int = 40
 
 
 class ConfluenceConfig(BaseModel):

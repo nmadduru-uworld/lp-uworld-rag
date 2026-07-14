@@ -4,7 +4,6 @@
     "trustRemoteCode": true,
     "queryPrefix": "search_query: ",
     "textPrefix": "search_document: ",
-    "dim": 768,
     "device": "auto"
   },
   "store": {
@@ -26,8 +25,7 @@
   },
   "rerank": {
     "enabled": true,
-    "model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
-    "candidatePoolCap": 40
+    "model": "cross-encoder/ms-marco-MiniLM-L-6-v2"
   },
   "confluence": {
     "baseUrl": "https://uworld.atlassian.net",

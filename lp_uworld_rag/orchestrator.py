@@ -21,6 +21,7 @@ from .config import RagConfig
 from .index import COLLECTIONS, RetrieverCache, _normalize_scores, build_retriever_cache
 from .index import query as index_query
 from .repo_registry import RepoRegistry
+from .tokens import count_tokens as _count_tokens
 
 _STABLE_ID_RE = re.compile(r"^(ep|ctrl)::([^:]+)::")
 _FILE_LINE_RE = re.compile(r"\b([\w.]+\.cs):(\d+)\b")
@@ -130,21 +131,6 @@ def _apply_code_inline_limit(chunks: list[dict], inline_top: int) -> list[dict]:
 # ceiling regardless of how many repos/chunks got routed (token budget).
 _CODE_SCORE_FLOOR = 0.3
 _DEFAULT_TOKEN_BUDGET = 6000
-
-_ENC = None
-
-
-def _count_tokens(text: str | None) -> int:
-    """tiktoken cl100k_base -- same tokenizer choice as eval.py's WS0 accounting (not imported from
-    there to avoid a circular import: eval.py imports this module for its Tier 5 orchestrator cases)."""
-    global _ENC
-    if not text:
-        return 0
-    if _ENC is None:
-        import tiktoken
-        _ENC = tiktoken.get_encoding("cl100k_base")
-    return len(_ENC.encode(text, disallowed_special=()))
-
 
 def _apply_score_floor(chunks: list[dict], floor: float | None) -> list[dict]:
     """Drop chunks whose (already cross-repo-normalized) score is below ``floor`` -- but never down

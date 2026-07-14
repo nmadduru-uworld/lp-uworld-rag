@@ -32,6 +32,18 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 
+def _load():
+    """Load config -- imported lazily (like every handler) so ``--help`` works without deps."""
+    from .config import load_config
+    return load_config()
+
+
+def _registry(cfg):
+    """Build the repo registry from config -- the two lines the four repo-facing handlers share."""
+    from .repo_registry import RepoRegistry
+    return RepoRegistry.from_config(cfg)
+
+
 def _cmd_ingest(args: argparse.Namespace) -> int:
     from .config import load_config
     from .ingest import run_ingest
@@ -130,12 +142,10 @@ def _cmd_ingest_code(args: argparse.Namespace) -> int:
 
 
 def _cmd_deep_query(args: argparse.Namespace) -> int:
-    from .config import load_config
     from .orchestrator import deep_query
-    from .repo_registry import RepoRegistry
 
-    cfg = load_config()
-    registry = RepoRegistry.from_config(cfg)
+    cfg = _load()
+    registry = _registry(cfg)
     result = deep_query(cfg, registry, args.text, top_k_docs=args.top_k_docs,
                          top_k_code=args.top_k_code, repos=args.repo)
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -143,12 +153,10 @@ def _cmd_deep_query(args: argparse.Namespace) -> int:
 
 
 def _cmd_query_code(args: argparse.Namespace) -> int:
-    from .config import load_config
     from .orchestrator import query_code
-    from .repo_registry import RepoRegistry
 
-    cfg = load_config()
-    registry = RepoRegistry.from_config(cfg)
+    cfg = _load()
+    registry = _registry(cfg)
     result = query_code(registry, args.text, repo=args.repo, file_hints=args.file_hint,
                          top_k=args.top_k)
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -156,11 +164,8 @@ def _cmd_query_code(args: argparse.Namespace) -> int:
 
 
 def _cmd_repos(args: argparse.Namespace) -> int:
-    from .config import load_config
-    from .repo_registry import RepoRegistry
-
-    cfg = load_config()
-    registry = RepoRegistry.from_config(cfg)
+    cfg = _load()
+    registry = _registry(cfg)
     ok = True
 
     if not args.validate:
@@ -190,12 +195,10 @@ def _cmd_repos(args: argparse.Namespace) -> int:
 
 
 def _cmd_validate_citations(args: argparse.Namespace) -> int:
-    from .config import load_config
     from .orchestrator import validate_citations
-    from .repo_registry import RepoRegistry
 
-    cfg = load_config()
-    registry = RepoRegistry.from_config(cfg)
+    cfg = _load()
+    registry = _registry(cfg)
     stale = validate_citations(cfg, registry)
     print(json.dumps(stale, indent=2, ensure_ascii=False))
     return 1 if stale else 0
