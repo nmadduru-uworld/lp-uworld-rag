@@ -54,7 +54,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
 
 def _cmd_query(args: argparse.Namespace) -> int:
     from .config import load_config
-    from .index import query as run_query
+    from .retrieval.docs_index import query as run_query
 
     result = run_query(load_config(), args.text, collection=args.collection, top_k=args.top_k,
                         include_siblings=not args.no_siblings)
@@ -64,7 +64,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
 
 def _cmd_expand(args: argparse.Namespace) -> int:
     from .config import load_config
-    from .index import expand as run_expand
+    from .retrieval.docs_index import expand as run_expand
 
     print(json.dumps(run_expand(load_config(), args.id), indent=2, ensure_ascii=False))
     return 0
@@ -73,7 +73,7 @@ def _cmd_expand(args: argparse.Namespace) -> int:
 def _cmd_status(args: argparse.Namespace) -> int:
     try:
         from .config import load_config
-        from .index import status as run_status
+        from .retrieval.docs_index import status as run_status
     except ImportError as exc:  # deps not installed yet -- scaffold-friendly
         print(f"lp-uworld-rag: dependencies not installed ({exc}). Run `pip install -e .` first.",
               file=sys.stderr)
@@ -142,7 +142,7 @@ def _cmd_ingest_code(args: argparse.Namespace) -> int:
 
 
 def _cmd_deep_query(args: argparse.Namespace) -> int:
-    from .orchestrator import deep_query
+    from .retrieval.orchestrator import deep_query
 
     cfg = _load()
     registry = _registry(cfg)
@@ -153,7 +153,7 @@ def _cmd_deep_query(args: argparse.Namespace) -> int:
 
 
 def _cmd_query_code(args: argparse.Namespace) -> int:
-    from .orchestrator import query_code
+    from .retrieval.orchestrator import query_code
 
     cfg = _load()
     registry = _registry(cfg)
@@ -195,7 +195,7 @@ def _cmd_repos(args: argparse.Namespace) -> int:
 
 
 def _cmd_validate_citations(args: argparse.Namespace) -> int:
-    from .orchestrator import validate_citations
+    from .retrieval.orchestrator import validate_citations
 
     cfg = _load()
     registry = _registry(cfg)

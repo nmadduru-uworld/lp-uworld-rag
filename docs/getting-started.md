@@ -96,14 +96,19 @@ see the repo-rag-contract doc's roadmap notes.)
 
 Dependencies point **inward** — inner layers never import outer ones:
 
-- **Core (reusable, depends on nothing above)** — `retrieval_engine.py` (embed model, Chroma client,
-  docstore, BM25, RRF fusion retriever, rerank), `tokens.py` (token counting), `store_sync.py`
-  (content-hash delta + docstore persist), the chunk id-hash and the result schema.
-- **Use-case** — the ingest runner (`ingest.py`), the query assembly (`index.py` docs,
-  `direct_index.py` code), and the cross-repo `orchestrator.py`.
+- **Core — the `common/` package (reusable, depends on nothing above)** — `common/retrieval_engine.py`
+  (embed model, Chroma client, docstore, BM25, RRF fusion retriever, rerank), `common/tokens.py`
+  (token counting), `common/store_sync.py` (content-hash delta + docstore persist),
+  `common/overrides.py` (the L1-override loader), plus the chunk id-hash and result schema.
+- **Use-case** — the ingest runner (`ingest.py`) and the `retrieval/` package:
+  `retrieval/docs_index.py` (docs query assembly), `retrieval/code_index.py` (repo-code query
+  assembly), and the cross-repo `retrieval/orchestrator.py`.
 - **Adapters** — `confluence_client.py` / `confluence_reader.py` (Confluence), and the
   `repo_ingest/` chunkers + retriever backends (code).
-- **Wiring** — `config.json`, `repos/<key>/ingest.json` specs, repo `rag-manifest.json`.
+- **Wiring** — `config.py`/`config.json`, `repos/<key>/ingest.json` specs, repo `rag-manifest.json`.
+
+(`common/` and `retrieval/` are real packages — the layering above is literally the directory
+structure, not just a diagram.)
 
 The **important/key** pieces are pluggable while the core stays shared. Today the **code** side is
 fully pluggable: a repo picks `index` or `serve` mode and can override the chunker or the retriever
@@ -238,7 +243,7 @@ Full interface: [repo-rag-contract.md](repo-rag-contract.md).
 ## Overriding the shared/common code
 
 Two seams, same two-level ladder — **L0** a built-in registry key (no code), **L1** one `.py` file
-on lp-uworld-rag's venv (never an in-repo tool). Both resolved by `_overrides.load_factory`. The core
+on lp-uworld-rag's venv (never an in-repo tool). Both resolved by `common/overrides.load_factory`. The core
 engine still owns ids/embedding/persistence/delta — you override only *how source becomes chunks* or
 *how a store is queried*.
 

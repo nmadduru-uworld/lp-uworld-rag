@@ -20,7 +20,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..direct_index import IndexEmbedConfig
+from ..retrieval.code_index import IndexEmbedConfig
 from .chunkers import get_chunker
 
 
@@ -123,9 +123,9 @@ def run_code_ingest(job: IngestJob, full: bool = False) -> int:
     from llama_index.core import StorageContext, VectorStoreIndex
     from llama_index.vector_stores.chroma import ChromaVectorStore
 
-    from .. import store_sync
-    from ..direct_index import get_embed_model
-    from ..retrieval_engine import open_chroma_client
+    from ..common import store_sync
+    from ..common.retrieval_engine import open_chroma_client
+    from ..retrieval.code_index import get_embed_model
 
     print(f"[ingest-code] {job.repo_key}: building nodes from {job.checkout_path} …")
     nodes = _build_nodes(job)

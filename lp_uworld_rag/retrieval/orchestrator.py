@@ -17,11 +17,11 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from .config import RagConfig
-from .index import COLLECTIONS, RetrieverCache, _normalize_scores, build_retriever_cache
-from .index import query as index_query
-from .repo_registry import RepoRegistry
-from .tokens import count_tokens as _count_tokens
+from ..config import RagConfig
+from .docs_index import COLLECTIONS, RetrieverCache, _normalize_scores, build_retriever_cache
+from .docs_index import query as index_query
+from ..repo_registry import RepoRegistry
+from ..common.tokens import count_tokens as _count_tokens
 
 _STABLE_ID_RE = re.compile(r"^(ep|ctrl)::([^:]+)::")
 _FILE_LINE_RE = re.compile(r"\b([\w.]+\.cs):(\d+)\b")

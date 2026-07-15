@@ -36,9 +36,9 @@ from dataclasses import dataclass
 from .chunker import decode_list_field
 from .config import RagConfig
 from .eval_cases import DIVERSITY_CASES, EXPAND_SAMPLES, ORCHESTRATOR_CASES, QUERIES
-from .index import (COLLECTIONS, RetrieverCache, _resolve_citations, build_retriever_cache,
-                     get_chroma_client, get_collection, query)
-from .tokens import count_tokens
+from .retrieval.docs_index import (COLLECTIONS, RetrieverCache, _resolve_citations,
+                                   build_retriever_cache, get_chroma_client, get_collection, query)
+from .common.tokens import count_tokens
 
 _CTRL_ID_RE = re.compile(r"^ctrl::[^:\s\[\]'\"/\\]+::[^:\s\[\]'\"/\\]+$")
 _EP_ID_RE = re.compile(r"^ep::[^:\s\[\]'\"/\\]+::[^:\s\[\]'\"/\\{}]+$")
@@ -324,7 +324,7 @@ def run_diversity_cases(cfg: RagConfig, cache=None) -> list[dict]:
 # EXPAND_SAMPLES (one id of each stable-id family) lives in eval_cases.py; this is the runner.
 
 def check_expand(cfg: RagConfig, cache: RetrieverCache) -> list[Finding]:
-    from .index import expand
+    from .retrieval.docs_index import expand
 
     findings: list[Finding] = []
     for id_, expected_doc_type in EXPAND_SAMPLES:
@@ -350,7 +350,7 @@ def check_expand(cfg: RagConfig, cache: RetrieverCache) -> list[Finding]:
 def run_orchestrator_cases(cfg: RagConfig, registry, cache=None) -> list[dict] | None:
     if registry is None or not registry.repo_keys():
         return None
-    from .orchestrator import deep_query
+    from .retrieval.orchestrator import deep_query
 
     cache = cache or build_retriever_cache(cfg)
     results = []

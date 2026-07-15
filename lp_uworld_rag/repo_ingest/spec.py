@@ -18,7 +18,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ..direct_index import IndexConfig, IndexEmbedConfig, IndexRetrievalConfig, IndexStoreConfig
+from ..retrieval.code_index import IndexConfig, IndexEmbedConfig, IndexRetrievalConfig, IndexStoreConfig
 from .pipeline import IngestJob
 
 

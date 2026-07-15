@@ -15,9 +15,9 @@ from __future__ import annotations
 import os
 from collections import Counter
 
-from . import retrieval_engine
-from .chunker import decode_list_field
-from .config import RagConfig
+from ..common import retrieval_engine
+from ..chunker import decode_list_field
+from ..config import RagConfig
 
 COLLECTIONS = ("functional", "technical")
 

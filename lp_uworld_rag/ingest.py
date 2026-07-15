@@ -21,7 +21,7 @@ from pathlib import Path
 
 from . import confluence_reader
 from .config import RagConfig
-from .index import _abs, _docstore_dir, get_embed_model
+from .retrieval.docs_index import _abs, _docstore_dir, get_embed_model
 
 
 def _collection_for(node) -> str:
@@ -63,8 +63,8 @@ def _sync_collection(cfg: RagConfig, collection: str, collection_pages: list[dic
     independent of the other collection's sync. Returns the collection's final chunk count. The
     delta mechanics (skip-unchanged/prune/docstore-rebuild) live in ``store_sync``, shared with the
     code ingest; only this collection's state-file schema (the extra ``pages`` version map) is local."""
-    from . import store_sync
-    from .index import get_chroma_client, get_collection
+    from .common import store_sync
+    from .retrieval.docs_index import get_chroma_client, get_collection
 
     state = {"pages": {}, "nodeIds": {}} if full else _load_state(cfg, collection)
     prev_node_ids: dict[str, list[str]] = state.get("nodeIds", {})

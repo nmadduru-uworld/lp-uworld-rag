@@ -20,7 +20,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from . import retrieval_engine
+from ..common import retrieval_engine
 
 
 class IndexEmbedConfig(BaseModel):

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..._overrides import load_factory
+from ...common.overrides import load_factory
 from .base import Chunker, ChunkerFactory, CodeChunk  # re-exported
 from .csharp import CSharpChunkerFactory
 from .generic import GenericChunkerFactory

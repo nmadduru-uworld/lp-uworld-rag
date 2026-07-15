@@ -18,8 +18,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
-from ._overrides import load_factory
-from .direct_index import IndexConfig
+from .common.overrides import load_factory
+from .retrieval.code_index import IndexConfig
 
 # v1: manifest must declare "serve" (spawn an MCP server) -- the only mode that existed at first.
 # v2: manifest declares "serve", "index" (direct Chroma read, no server -- see direct_index.py), or
@@ -248,12 +248,12 @@ class _DefaultRetriever:
         if self._cache is None:
             with self._lock:
                 if self._cache is None:
-                    from . import direct_index
+                    from .retrieval import code_index as direct_index
                     self._cache = direct_index.build_retriever_cache(self.persist_dir, self.index_cfg)
         return self._cache
 
     def query(self, question: str, top_k: int | None, file_hints: list[str] | None) -> dict:
-        from . import direct_index
+        from .retrieval import code_index as direct_index
         return direct_index.query(self.persist_dir, self.index_cfg, question,
                                   top_k=top_k, file_hints=file_hints, cache=self._ensure_cache())
 
@@ -305,7 +305,7 @@ class _DirectIndexSession:
         return self._ensure().query(question, top_k, file_hints)
 
     def status(self) -> str:
-        from . import direct_index
+        from .retrieval import code_index as direct_index
         return direct_index.status(self.manifest.resolved_index_persist_dir(), self.manifest.index)
 
 

@@ -11,9 +11,9 @@ import json
 def serve() -> None:
     from mcp.server.fastmcp import FastMCP
 
-    from . import index, orchestrator
     from .config import load_config
     from .repo_registry import RepoRegistry
+    from .retrieval import docs_index as index, orchestrator
 
     cfg = load_config()
     # Built ONCE for the server's whole lifetime -- reused by every call. Without this, each call
