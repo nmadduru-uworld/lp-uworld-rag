@@ -8,3 +8,4 @@ __pycache__/
 *.egg-info/
 # Office (PowerPoint/Word) owner/lock temp files
 ~$*
+.ingest_body_cache.json

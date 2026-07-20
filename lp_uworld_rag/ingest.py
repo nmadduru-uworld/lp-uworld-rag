@@ -51,10 +51,22 @@ def _embed_and_upsert(cfg: RagConfig, nodes: list, collection_obj, collection: s
     from llama_index.core import StorageContext, VectorStoreIndex
     from llama_index.vector_stores.chroma import ChromaVectorStore
 
+    from .common import store_sync
+
     embed = get_embed_model(cfg, collection)
     vstore = ChromaVectorStore(chroma_collection=collection_obj)
     storage = StorageContext.from_defaults(vector_store=vstore)
-    VectorStoreIndex(nodes, storage_context=storage, embed_model=embed, show_progress=True)
+    # Batch-wise with progress: at Data-Stores-catalog scale this phase is minutes-long, and
+    # a single monolithic embed loses everything on interruption. Deleting each batch's ids
+    # before adding makes a crashed run's partial work safely re-addable (no duplicate-id
+    # errors), so re-running after an interruption just continues.
+    BATCH = 64
+    for i in range(0, len(nodes), BATCH):
+        batch = nodes[i:i + BATCH]
+        store_sync.safe_delete(collection_obj, [n.id_ for n in batch])
+        VectorStoreIndex(batch, storage_context=storage, embed_model=embed, show_progress=False)
+        print(f"[ingest]   {collection}: embedded {min(i + BATCH, len(nodes))}/{len(nodes)} chunks",
+              flush=True)
 
 
 def _sync_collection(cfg: RagConfig, collection: str, collection_pages: list[dict],

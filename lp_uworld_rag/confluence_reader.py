@@ -77,7 +77,11 @@ def classify(metadata: dict, title: str, parent_title: str | None) -> str | None
         return metadata["docType"]
     if "endpoint_id" in metadata:
         return "endpoint"
-    if "store" in metadata and "collection" in metadata:
+    # "store:"/"collection:" is the original hand-written convention; lp-datastore-docs
+    # generated pages use the more precise "database:" plus "table:" (SQL) / "collection:"
+    # (Mongo) -- both classify identically.
+    if (("store" in metadata or "database" in metadata)
+            and ("collection" in metadata or "table" in metadata)):
         return "db-collection"
     if "repoType" in metadata:
         return "repo-registry"
@@ -174,7 +178,10 @@ def _build_tags(doc_type: str, metadata: dict) -> dict:
             "db_ids": _as_list(metadata.get("db_ids")),
         }
     if doc_type == "db-collection":
-        store, collection = metadata.get("store"), metadata.get("collection")
+        # Alias mapping: generated pages say database:/table: (SQL) or database:/collection:
+        # (Mongo); hand-written ones say store:/collection:. Same identity either way.
+        store = metadata.get("store") or metadata.get("database")
+        collection = metadata.get("collection") or metadata.get("table")
         return {
             "store": store,
             "type": metadata.get("type"),
@@ -207,12 +214,43 @@ def read_all(cfg: RagConfig, pages: list[dict] | None = None) -> list:
     pages = pages if pages is not None else crawl(cfg)
     title_by_id = {p["id"]: p["title"] for p in pages}
 
+    # Body cache keyed by Confluence version: at Data-Stores-catalog scale (hundreds of
+    # pages) refetching every body each run dominates wall-clock; an unchanged version
+    # number means an identical body, so reuse it. Written incrementally so an interrupted
+    # run keeps its fetch progress. Gitignored local artifact.
+    cache_path = cfg.root_path / ".ingest_body_cache.json"
+    try:
+        body_cache: dict = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        body_cache = {}
+
+    def _save_cache() -> None:
+        tmp = cache_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(body_cache), encoding="utf-8")
+        tmp.replace(cache_path)
+
     nodes = []
     endpoint_records: list[dict] = []  # for the controller used_by cross-reference pass
     repo_registry_pages: list[tuple[dict, dict, dict]] = []
 
-    for page in pages:
-        body = confluence_client.get_page_body(cfg.confluence, page["id"])
+    cache_hits = 0
+    for n, page in enumerate(pages, 1):
+        # Progress heartbeat -- a silent fetch loop looks hung; flush so it's visible
+        # through redirected/buffered stdout.
+        if n % 25 == 0 or n == len(pages):
+            print(f"[ingest]   fetched {n}/{len(pages)} pages ({cache_hits} from cache) …",
+                  flush=True)
+            _save_cache()
+        cached = body_cache.get(page["id"])
+        if cached is not None and page.get("version") is not None \
+                and cached.get("version") == page["version"]:
+            body = {"id": page["id"], "title": page["title"], "markdown": cached["markdown"]}
+            cache_hits += 1
+        else:
+            body = confluence_client.get_page_body(cfg.confluence, page["id"])
+            if body is not None and page.get("version") is not None:
+                body_cache[page["id"]] = {"version": page["version"],
+                                          "markdown": body["markdown"]}
         if body is None:
             continue
         metadata = parse_metadata_line(body["markdown"])
@@ -289,6 +327,12 @@ def read_all(cfg: RagConfig, pages: list[dict] | None = None) -> list:
 
     if cfg.confluence.manifestPath:
         _audit_manifest(cfg.confluence.manifestPath, {p["id"] for p in pages})
+
+    # Prune cache entries for pages that no longer exist, then persist the final cache.
+    current_ids = {p["id"] for p in pages}
+    for stale in set(body_cache) - current_ids:
+        del body_cache[stale]
+    _save_cache()
 
     return nodes
 
