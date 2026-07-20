@@ -36,6 +36,17 @@ ingest only re-embeds what changed. Flags: `-Full` (rebuild from scratch), `-Ski
 use on a machine without the repo checkouts), `-DryRun` (print the steps without running them).
 Omit `-Email`/`-Token` to be prompted (token input hidden).
 
+### Make the lp-rag skill available everywhere (optional, recommended)
+
+```
+.\tools\Install-LpRagSkill.ps1
+```
+
+Installs the `lp-rag` skill to your user-level `~\.claude\skills\` and registers the MCP server
+user-scoped (absolute path to this clone's venv) -- after that, any **new** Claude Code session in
+any directory can answer LP questions (`/lp-rag`, or just ask) without this repo's `.mcp.json`.
+Run it after `setup.ps1` (it needs the venv and an ingested index).
+
 ### Manual setup
 
 ```
