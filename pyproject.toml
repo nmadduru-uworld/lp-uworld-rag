@@ -7,7 +7,7 @@ name = "lp-uworld-rag"
 version = "0.1.0"
 description = "Shared functional/technical RAG for the UWorld LP Confluence knowledge base (docs_functional + docs_technical)."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.15"   # validated on 3.14; upper bound = wheel availability (torch/chromadb)
 dependencies = [
     # Orchestration / node model
     "llama-index-core>=0.11",

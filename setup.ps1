@@ -58,13 +58,47 @@ function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan 
 function Write-DryRun([string]$msg) { Write-Host "[dry-run] $msg" -ForegroundColor DarkGray }
 
 # -- 1. venv --------------------------------------------------------------------
+# Supported Python range for this project's wheel-sensitive deps (torch/cu126, chromadb,
+# tree-sitter): 3.10 <= version < 3.15. Validated on 3.14. A bare `python` on PATH may be
+# anything (or a Windows Store stub), so resolve a supported interpreter explicitly.
+function Test-PythonOk([string[]]$cmd) {
+    # In range 3.10..3.14 AND a regular (GIL) build -- free-threaded "3.14t" builds have no
+    # prebuilt wheels for torch/chromadb, so pip tries to compile C++ from source and fails.
+    # Probe deliberately contains no quotes (PowerShell strips inner quotes on native args);
+    # sys.version carries a "free-threading build" marker on t-builds.
+    $out = & $cmd[0] $cmd[1..$cmd.Length] -c "import sys; print(sys.version)" 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return $false }
+    $line = "$out"
+    if ($line -match "free.?threading") { return $false }
+    if ($line -notmatch "^(\d+\.\d+\.\d+)") { return $false }
+    $v = [version]$Matches[1]
+    return ($v -ge [version]"3.10" -and $v -lt [version]"3.15")
+}
+
+function Resolve-Python {
+    # Preference order = wheel availability: 3.12/3.11 have the broadest prebuilt-wheel
+    # coverage for this project's deps; 3.13/3.14 work but are newer; PATH python last so a
+    # stray install doesn't win over a known-good launcher version.
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        foreach ($ver in "3.12", "3.11", "3.13", "3.14", "3.10") {
+            if (Test-PythonOk @("py", "-$ver")) { return @("py", "-$ver") }
+        }
+    }
+    if ((Get-Command python -ErrorAction SilentlyContinue) -and (Test-PythonOk @("python"))) {
+        return @("python")
+    }
+    throw ("No supported Python found: need 3.10-3.14, standard (non-free-threaded) build. " +
+           "Install 3.12 from python.org and re-run.")
+}
+
 if (Test-Path $py) {
     Write-Step "venv already present (.venv) -- skipping creation"
 } elseif ($DryRun) {
-    Write-DryRun "python -m venv .venv"
+    Write-DryRun "python -m venv .venv  (version-checked via Resolve-Python)"
 } else {
-    Write-Step "creating .venv"
-    python -m venv .venv
+    $pyCmd = Resolve-Python
+    Write-Step "creating .venv with: $($pyCmd -join ' ')"
+    & $pyCmd[0] $pyCmd[1..$pyCmd.Length] -m venv .venv
 }
 
 # -- 2. install -----------------------------------------------------------------
