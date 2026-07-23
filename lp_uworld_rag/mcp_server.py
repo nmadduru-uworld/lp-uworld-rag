@@ -25,6 +25,9 @@ def serve() -> None:
     registry = RepoRegistry.from_config(cfg)
     app = FastMCP("lp-uworld-rag")
 
+    print("--"**10)
+    print('MCP Server is Up and Running')
+
     @app.tool()
     def query_rag(question: str, collection: str | None = None, top_k: int | None = None,
                   include_siblings: bool = True) -> str:

@@ -2,7 +2,7 @@
   "mcpServers": {
     "lp-uworld-rag": {
       "type": "stdio",
-      "command": "${CLAUDE_PROJECT_DIR:-.}/.venv/Scripts/python.exe",
+      "command": ".venv/Scripts/python.exe",
       "args": ["-m", "lp_uworld_rag", "mcp"]
     }
   }

@@ -87,32 +87,32 @@ explicitly ("functional hub -- link pending").
 
 Every module under `lp_uworld_rag/`, by role:
 
-| Module | What it does |
-| --- | --- |
-| **Entry / config** | |
-| `__main__.py` | CLI verbs + dispatch (`ingest`, `query`, `deep-query`, `ingest-code`, `repos`, …) |
-| `config.py` | Typed (`pydantic`) load of `config.json` -- embed/store/collections/retrieval/rerank/confluence/repos |
-| `mcp_server.py` | FastMCP stdio server exposing `query_rag`/`expand`/`deep_query`/`query_code`/`rag_status` |
-| **`common/`** (core — reusable, depends on nothing above) | |
-| `common/retrieval_engine.py` | **Shared primitives** -- embed model, Chroma client, docstore, BM25, fusion retriever, rerank (used by both retrieval engines) |
-| `common/store_sync.py` | Ingest-time content-hash delta + docstore persist, shared by docs + code ingest |
-| `common/tokens.py` | One `count_tokens` (tiktoken `cl100k_base`) shared by `eval` + `orchestrator` |
-| `common/overrides.py` | Shared L1-override `importlib` loader behind the chunker + retriever override seams |
-| **Docs pipeline** | |
-| `confluence_client.py` | Confluence Cloud REST v2 client (children, body → markdown) |
-| `confluence_reader.py` | Crawl the two Confluence trees, parse metadata, classify doc_type, section-split |
-| `chunker.py` | One capped, Chroma-safe `TextNode` per page/section (content-hash id) |
-| `ingest.py` | Crawl → chunk → content-hash **delta** upsert into `docs_functional` + `docs_technical` |
-| **`retrieval/`** (query-time engines, build on `common/`) | |
-| `retrieval/docs_index.py` | Docs engine (was `index.py`): retrieve → resolve linked ids as citations → quota/rerank/rank |
-| `retrieval/code_index.py` | Repo-code "index"-mode engine (was `direct_index.py`): hint-boost, priority order, small-to-big parent join |
-| `retrieval/orchestrator.py` | `deep_query`/`query_code`: docs → route by stable-id → each routed repo's code-RAG; score floor + token budget |
-| **Repo plug-in** | |
-| `repo_registry.py` | Load repo manifests; run each via `serve` (MCP subprocess) or `index` (in-process); conformance validation |
-| `repo_ingest/` | Central code ingestion: `spec.py` (per-repo spec deep-merge), `pipeline.py` (checkout → chunks → Chroma), `layer.py`, `chunkers/*` (C#/markdown/generic registry) |
-| **Quality** | |
-| `eval.py` | 5-tier eval **harness/engine** (metadata integrity, resolve, retrieval quality, expand, routing) |
-| `eval_cases.py` | The domain-specific query/expand/routing **fixtures** the harness runs (kept out of the harness so it stays domain-agnostic) |
+| Module                                                              | What it does                                                                                                                                                               |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Entry / config**                                            |                                                                                                                                                                            |
+| `__main__.py`                                                     | CLI verbs + dispatch (`ingest`, `query`, `deep-query`, `ingest-code`, `repos`, …)                                                                               |
+| `config.py`                                                       | Typed (`pydantic`) load of `config.json` -- embed/store/collections/retrieval/rerank/confluence/repos                                                                  |
+| `mcp_server.py`                                                   | FastMCP stdio server exposing`query_rag`/`expand`/`deep_query`/`query_code`/`rag_status`                                                                         |
+| **`common/`** (core — reusable, depends on nothing above)  |                                                                                                                                                                            |
+| `common/retrieval_engine.py`                                      | **Shared primitives** -- embed model, Chroma client, docstore, BM25, fusion retriever, rerank (used by both retrieval engines)                                       |
+| `common/store_sync.py`                                            | Ingest-time content-hash delta + docstore persist, shared by docs + code ingest                                                                                            |
+| `common/tokens.py`                                                | One`count_tokens` (tiktoken `cl100k_base`) shared by `eval` + `orchestrator`                                                                                       |
+| `common/overrides.py`                                             | Shared L1-override`importlib` loader behind the chunker + retriever override seams                                                                                       |
+| **Docs pipeline**                                             |                                                                                                                                                                            |
+| `confluence_client.py`                                            | Confluence Cloud REST v2 client (children, body → markdown)                                                                                                               |
+| `confluence_reader.py`                                            | Crawl the two Confluence trees, parse metadata, classify doc_type, section-split                                                                                           |
+| `chunker.py`                                                      | One capped, Chroma-safe`TextNode` per page/section (content-hash id)                                                                                                     |
+| `ingest.py`                                                       | Crawl → chunk → content-hash**delta** upsert into `docs_functional` + `docs_technical`                                                                         |
+| **`retrieval/`** (query-time engines, build on `common/`) |                                                                                                                                                                            |
+| `retrieval/docs_index.py`                                         | Docs engine (was`index.py`): retrieve → resolve linked ids as citations → quota/rerank/rank                                                                            |
+| `retrieval/code_index.py`                                         | Repo-code "index"-mode engine (was`direct_index.py`): hint-boost, priority order, small-to-big parent join                                                               |
+| `retrieval/orchestrator.py`                                       | `deep_query`/`query_code`: docs → route by stable-id → each routed repo's code-RAG; score floor + token budget                                                       |
+| **Repo plug-in**                                              |                                                                                                                                                                            |
+| `repo_registry.py`                                                | Load repo manifests; run each via`serve` (MCP subprocess) or `index` (in-process); conformance validation                                                              |
+| `repo_ingest/`                                                    | Central code ingestion:`spec.py` (per-repo spec deep-merge), `pipeline.py` (checkout → chunks → Chroma), `layer.py`, `chunkers/*` (C#/markdown/generic registry) |
+| **Quality**                                                   |                                                                                                                                                                            |
+| `eval.py`                                                         | 5-tier eval**harness/engine** (metadata integrity, resolve, retrieval quality, expand, routing)                                                                      |
+| `eval_cases.py`                                                   | The domain-specific query/expand/routing**fixtures** the harness runs (kept out of the harness so it stays domain-agnostic)                                          |
 
 The package is layered like an onion: **`common/`** (core primitives, no intra-package deps) →
 **`retrieval/`** + docs pipeline (build on core) → repo plug-in → `eval`, with `config.py` /
