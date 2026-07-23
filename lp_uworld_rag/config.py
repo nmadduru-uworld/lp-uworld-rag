@@ -131,8 +131,18 @@ class ReposConfig(BaseModel):
     # the shared code-ingestion engine (see repo_ingest). Gitignored (this lives in config.json, not
     # the committed config.json.example) because it's an absolute, machine-specific path; the
     # committed per-repo spec (repos/<repoKey>/ingest.json) holds everything shareable. Same
-    # local-override precedent as ConfluenceConfig.emailValue.
+    # local-override precedent as ConfluenceConfig.emailValue. OPTIONAL now: repos checked out as
+    # siblings of lp-uworld-rag are auto-discovered (siblingScan), so most machines need no entry
+    # here -- checkouts remains an explicit override for a repo on another drive/nonstandard layout.
     checkouts: dict[str, str] = Field(default_factory=dict)
+    # Auto-discover sibling repos: scan the directory that CONTAINS lp-uworld-rag for
+    # <sibling>/.rag/ingest.json (or .rag/rag-manifest.json) and register each by its declared
+    # repoKey, using the sibling dir as the checkout. Zero machine-local config for the common case
+    # where all repos are cloned side-by-side. Set false to disable.
+    siblingScan: bool = True
+    # Override the directory scanned for siblings. None -> parent of root_path (the dir holding this
+    # lp-uworld-rag checkout). Relative values resolve against root_path.
+    siblingRoot: str | None = None
 
 
 class RagConfig(BaseModel):
@@ -173,6 +183,16 @@ class RagConfig(BaseModel):
         """Directory holding committed per-repo ingestion specs: repos/common.json +
         repos/<repoKey>/ingest.json (ships with this project)."""
         return self.root_path / "repos"
+
+    def sibling_root(self) -> Path:
+        """Directory scanned for sibling repos that ship their own .rag/ spec. Defaults to the
+        parent of root_path (the dir that CONTAINS this lp-uworld-rag checkout), so repos cloned
+        side-by-side are found with no machine-local config. repos.siblingRoot overrides it."""
+        raw = self.repos.siblingRoot
+        if not raw:
+            return self.root_path.parent
+        p = Path(raw)
+        return p if p.is_absolute() else (self.root_path / p).resolve()
 
     def code_store_dir(self, repo_key: str) -> Path:
         """Where a repo's code index is written locally -- derived from repoKey, gitignored."""

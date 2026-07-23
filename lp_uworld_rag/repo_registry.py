@@ -363,14 +363,17 @@ class RepoRegistry:
     @classmethod
     def from_config(cls, cfg) -> "RepoRegistry":
         """Build a registry from config: legacy/serve-mode external manifests
-        (``repos.manifests``) PLUS every discovered per-repo spec (``repos/<repoKey>/ingest.json``,
-        rendered to an in-memory index-mode manifest). A spec that fails to build is recorded as an
-        error rather than raised, so one broken repo doesn't block the rest."""
+        (``repos.manifests``) PLUS every repo resolved by ``spec.resolve_repo_sources`` -- a
+        repo-owned ``.rag/ingest.json`` in a sibling checkout (auto-discovered), an explicit
+        ``repos.checkouts`` override, or a legacy central ``repos/<repoKey>/ingest.json`` -- each
+        rendered to an in-memory index-mode manifest (or loaded directly if the repo ships its own
+        rag-manifest.json). A repo that fails to build is recorded as an error rather than raised, so
+        one broken repo doesn't block the rest."""
         from .repo_ingest import spec as _spec
 
         prebuilt: list[RepoManifest] = []
         spec_errors: dict[str, str] = {}
-        for key in _spec.discover_repo_keys(cfg.repos_dir()):
+        for key in _spec.all_repo_keys(cfg):
             try:
                 prebuilt.append(_spec.to_manifest(cfg, key))
             except Exception as exc:

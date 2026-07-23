@@ -118,13 +118,21 @@ def _cmd_ingest_code(args: argparse.Namespace) -> int:
     via the shared engine (repo_ingest), pointed at the checkout path in config.json."""
     from .config import load_config
     from .repo_ingest.pipeline import run_code_ingest
-    from .repo_ingest.spec import discover_repo_keys, load_job
+    from .repo_ingest.spec import load_job, resolve_repo_sources
 
     cfg = load_config()
     if args.all:
-        keys = discover_repo_keys(cfg.repos_dir())
+        # Every ingest-capable repo across all sources (sibling .rag/ingest.json, explicit
+        # checkouts, legacy central). Skip manifest-only repos -- they ship/serve their own index.
+        sources = resolve_repo_sources(cfg)
+        keys = sorted(k for k, s in sources.items() if s.spec_path is not None)
+        skipped = sorted(k for k, s in sources.items() if s.spec_path is None)
+        if skipped:
+            print(f"[ingest-code] skipping manifest-only repos (self-managed index): "
+                  f"{', '.join(skipped)}", file=sys.stderr)
         if not keys:
-            print("no repo specs found under repos/*/ingest.json", file=sys.stderr)
+            print("no ingestable repo specs found (sibling .rag/ingest.json, repos.checkouts, "
+                  "or repos/*/ingest.json)", file=sys.stderr)
             return 1
     else:
         keys = [args.repo]

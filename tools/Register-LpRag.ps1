@@ -1,20 +1,19 @@
 <#
 .SYNOPSIS
-    Install the lp-rag skill + MCP server at USER level, so any Claude Code session
+    Register the lp-rag skill + MCP server at USER level, so any Claude Code session
     (any directory, any repo) can query the LP knowledge base.
 
 .DESCRIPTION
-    Does two things:
-      1. Copies .claude/skills/lp-rag -> %USERPROFILE%\.claude\skills\lp-rag
-         (user-level skills are available everywhere, not just inside this repo).
-      2. Registers the MCP server user-scoped via `claude mcp add --scope user`,
-         pointing at THIS clone's venv python -- absolute paths, works from any cwd.
+    Two steps:
+      1. Copy the lp-rag skill to %USERPROFILE%\.claude\skills\lp-rag (user-level skills are
+         available in every session, not just inside this repo).
+      2. Register the MCP server user-scoped via `claude mcp add --scope user`, pointing at THIS
+         clone's venv python (absolute path derived from the repo root -> portable per clone).
 
-    Prerequisites: setup.ps1 has been run (venv exists) and an index has been built
-    (`python -m lp_uworld_rag ingest`) or copied from a teammate.
+    Prerequisite: run setup.ps1 first (creates .venv and builds/ingests the index).
 
 .EXAMPLE
-    .\tools\Install-LpRagSkill.ps1
+    .\tools\Register-LpRag.ps1
 #>
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path $PSScriptRoot -Parent

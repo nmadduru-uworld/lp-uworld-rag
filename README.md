@@ -39,7 +39,7 @@ Omit `-Email`/`-Token` to be prompted (token input hidden).
 ### Make the lp-rag skill available everywhere (optional, recommended)
 
 ```
-.\tools\Install-LpRagSkill.ps1
+.\tools\Register-LpRag.ps1
 ```
 
 Installs the `lp-rag` skill to your user-level `~\.claude\skills\` and registers the MCP server
@@ -166,30 +166,49 @@ The code-ingestion engine lives **here**, in `lp_uworld_rag/repo_ingest/`, on th
 venv -- a repo needs no RAG tool (venv, deps, ingest code) checked into its own tree. You point the
 engine at a repo's checkout and it builds that repo's code index.
 
-Repo-wise structure:
+### Onboard a repo — one file, in that repo (recommended)
+
+The repo **owns its spec**: add `.rag/ingest.json` at the repo root, check the repo out **as a
+sibling of lp-uworld-rag**, and it's auto-discovered — no edit to lp-uworld-rag, no `config.json`
+path.
+
+```jsonc
+// <your-repo>/.rag/ingest.json
+{ "repoKey": "reports",                          // MUST equal the `repo` in Confluence doc metadata
+  "displayName": "uwwebtech.learningplatform.reports.api",
+  "language": "csharp",
+  "sourceDirs": ["uwwebtech.learningplatform.reports.api", "…application", "…infrastructure"],
+  "sourceExclude": ["bin","obj",".g.cs","Migrations","Properties"] }
+```
 
 ```
-lp-uworld-rag/
-  repos/                     # committed, ships with this project
-    common.json              #   shared defaults (embed model, retrieval/quotas, excludes)
-    <repoKey>/ingest.json    #   per-repo override (language, sourceDirs, ...); deep-merges over common
-  code_stores/<repoKey>/     # gitignored -- the built index (Chroma + docstore), derived from repoKey
-  config.json                # gitignored -- repos.checkouts: { "<repoKey>": "<abs path to checkout>" }
-  lp_uworld_rag/repo_ingest/ # the shared engine: pipeline + per-language chunker registry
+python -m lp_uworld_rag ingest-code --all     # discovers every sibling shipping .rag/ingest.json
+python -m lp_uworld_rag repos --validate       # confirm it loads + conforms
 ```
 
-To onboard a repo: add `repos/<repoKey>/ingest.json` (see `repos/reports/ingest.json`), set its
-checkout path under `repos.checkouts` in `config.json`, then:
+`repoKey` **must equal** the `repo` value in the Confluence doc metadata (`ep::<repoKey>::...`) — that
+routes a doc hit to this index. A repo may instead ship `.rag/rag-manifest.json` (the serve/index
+contract) if it manages its own index. Shared defaults (embed model, retrieval tuning, excludes) are
+**baked into the engine** (`repo_ingest/spec.py: COMMON_DEFAULTS`), so your `.rag/ingest.json`
+declares only what differs — typically just `repoKey` + `sourceDirs`.
+
+**Sibling layout is required — there is no per-repo config.** A repo is discovered iff it ships
+`.rag/ingest.json` **and** is cloned under the same parent folder as lp-uworld-rag. No
+`config.json` entries, no central specs, no checkout paths. (The scan folder can be redirected with
+`repos.siblingRoot` for an unusual layout, but the default — actual siblings — needs nothing.)
+
+Structure:
 
 ```
-python -m lp_uworld_rag ingest-code --repo <repoKey> [--full]   # or --all for every configured repo
-python -m lp_uworld_rag repos --validate                        # confirm it loads + conforms
+<parent dir>/
+  lp-uworld-rag/
+    code_stores/<repoKey>/       # gitignored built index (Chroma + docstore), derived from repoKey
+    config.json                  # gitignored; NO repos entries needed
+  <your-repo>/.rag/ingest.json   # repo-owned spec, auto-discovered as a sibling
 ```
 
 Ingest is a content-hash **delta**: a re-run only re-embeds files whose chunks actually changed and
-prunes files that disappeared; `--full` rebuilds. `repoKey` **must equal** the `repo` value in the
-Confluence doc metadata (`ep::<repoKey>::...`) -- that's how the orchestrator routes a doc hit to
-this index.
+prunes files that disappeared; `--full` rebuilds.
 
 ### Overriding the defaults
 

@@ -25,10 +25,20 @@ recommended path -- keep `serve` only as a fallback for manual debugging or unti
 proven out). `contractVersion: 1` manifests may only declare `serve` (adding `index` requires
 bumping to `2`); `contractVersion: 2` manifests must declare at least one of the two.
 
+> **Recommended onboarding (build-time spec):** most repos don't need a hand-authored
+> `rag-manifest.json`. Ship a `.rag/ingest.json` at the repo root declaring `repoKey` + `sourceDirs`
+> (see the README "Onboard a repo" section). When the repo is checked out as a sibling of
+> lp-uworld-rag it is **auto-discovered** (`repo_ingest/spec.py: discover_sibling_specs`), centrally
+> ingested, and rendered into an in-memory `contractVersion: 2` `index`-mode manifest — the exact
+> shape below, no file to write. Hand-author `rag-manifest.json` only for `serve` mode or a
+> bespoke self-built index. Precedence: explicit `config.json repos.checkouts` → sibling `.rag/` →
+> legacy central `repos/<repoKey>/ingest.json`.
+
 ## 1. Manifest
 
-Each repo ships a `rag-manifest.json` inside its own RAG tool directory. All paths in it are
-resolved relative to the manifest file's own location, not the orchestrator's working directory.
+Each repo ships a `rag-manifest.json` inside its own RAG tool directory (or a `.rag/ingest.json`
+that renders into one — see the note above). All paths in it are resolved relative to the manifest
+file's own location, not the orchestrator's working directory.
 
 ```json
 {

@@ -247,8 +247,9 @@ on lp-uworld-rag's venv (never an in-repo tool). Both resolved by `common/overri
 engine still owns ids/embedding/persistence/delta — you override only *how source becomes chunks* or
 *how a store is queried*.
 
-**Chunker override** — in `repos/<key>/ingest.json`: `"chunker": "D:/path/to/my_chunker.py"`. The
-file exposes a module-level `factory` (or `get_factory()`):
+**Chunker override** — in the repo's `.rag/ingest.json`: `"chunker": "chunkers/my_chunker.py"` (a
+path relative to the spec file, or an absolute path). The file exposes a module-level `factory`
+(or `get_factory()`):
 ```python
 class MyChunkerFactory:
     def create(self, root, source_dirs, exclude, **opts):
@@ -256,7 +257,8 @@ class MyChunkerFactory:
 factory = MyChunkerFactory()
 ```
 
-**Retriever override** — in the manifest's `index` block: `"retriever": "D:/path/to/my_retriever.py"`.
+**Retriever override** — in the repo's `.rag/ingest.json`: `"retriever": "retrievers/my_retriever.py"`
+(relative to the spec file, or absolute).
 ```python
 class MyRetrieverFactory:
     def create(self, persist_dir, index_cfg):

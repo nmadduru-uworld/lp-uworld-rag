@@ -40,9 +40,8 @@
     "apiTokenValue": null
   },
   "repos": {
+    "siblingScan": true,
     "manifests": [],
-    "checkouts": {
-      "reports": "D:/uwwebtech.learningplatform.reports.api"
-    }
+    "checkouts": {}
   }
 }
