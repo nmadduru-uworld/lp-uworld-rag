@@ -24,8 +24,8 @@ def serve() -> None:
     # first use and then kept alive for this server's whole lifetime (see repo_registry.py).
     registry = RepoRegistry.from_config(cfg)
     app = FastMCP("lp-uworld-rag")
-
-    print("--"**10)
+    
+    print("--"*10)
     print('MCP Server is Up and Running')
 
     @app.tool()
