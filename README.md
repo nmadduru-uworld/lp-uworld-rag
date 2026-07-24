@@ -10,78 +10,55 @@ It never imports another repo's code as a library. It does two things across rep
 - **Orchestrates at query time** -- `deep_query` routes a doc hit to the repo(s) it's actually
   about and retrieves from their code index too (see "Cross-repo routing" below).
 
-> **New here?** Start with **[docs/getting-started.md](docs/getting-started.md)** — a plain-language
-> tour (what/why, glossary, how it works end to end, the three tiers, config reference,
-> troubleshooting, "how do I know it worked"). There's also a slide deck under
-> [`presentation/`](presentation/) (`lp-uworld-rag-pitch.pptx`, or the rendered
-> `presentation/slides/slide-01.png`…`slide-16.png`).
+> **New here? → [ONBOARDING.md](ONBOARDING.md)** — the step-by-step get-running guide (query-only in
+> ~10 min with a prebuilt index, or a full build from Confluence). This README is the **technical
+> reference**: usage, architecture, configuration, and how to plug a repo's code in.
 
-## Setup
+## Getting started
 
-### Quick start (one command)
-
-From a PowerShell prompt in the repo root (a Confluence API token comes from
-https://id.atlassian.com/manage-profile/security/api-tokens):
+Full setup — prerequisites, the two paths, and troubleshooting — lives in
+**[ONBOARDING.md](ONBOARDING.md)**. In short, from the repo root:
 
 ```
-.\setup.ps1 -Email you@uworld.com -Token <token>
+.\scripts\setup.ps1 -QueryOnly        # query with a prebuilt index (no Confluence token needed)
+.\scripts\setup.ps1 -Email you@uworld.com -Token <token>   # OR a full build from Confluence
+.\scripts\Register-LpRag.ps1    # register lp-rag for Claude Code, Cowork, and Desktop
 ```
 
-That single command creates the `.venv`, `pip install -e .`, copies `config.json` from the example,
-sets the two Confluence env vars (persisted to your user environment **and** the current session --
-your token is never written to any file in the repo), ingests the Confluence docs, ingests every
-configured repo's code (`ingest-code --all`), then runs `repos --validate` and `status`. It's
-idempotent: re-running skips venv creation, never clobbers an existing `config.json`, and the delta
-ingest only re-embeds what changed. Flags: `-Full` (rebuild from scratch), `-SkipCode` (docs only --
-use on a machine without the repo checkouts), `-DryRun` (print the steps without running them).
-Omit `-Email`/`-Token` to be prompted (token input hidden).
-
-### Make the lp-rag skill available everywhere (optional, recommended)
-
-```
-.\tools\Register-LpRag.ps1
-```
-
-Installs the `lp-rag` skill to your user-level `~\.claude\skills\` and registers the MCP server
-user-scoped (absolute path to this clone's venv) -- after that, any **new** Claude Code session in
-any directory can answer LP questions (`/lp-rag`, or just ask) without this repo's `.mcp.json`.
-Run it after `setup.ps1` (it needs the venv and an ingested index).
-
-### Manual setup
-
-```
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e .
-cp config.json.example config.json   # defaults match the live space; edit if needed
-```
-
-Set two environment variables (a Confluence API token from
-https://id.atlassian.com/manage-profile/security/api-tokens):
-
-```
-setx CONFLUENCE_EMAIL "you@uworld.com"
-setx CONFLUENCE_API_TOKEN "<token>"
-```
+`setup.ps1` is idempotent and delta-based (re-runs only re-embed what changed). Flags: `-QueryOnly`,
+`-Full`, `-SkipCode`, `-DryRun`. See ONBOARDING.md for the prebuilt-index download and prerequisites.
 
 ## Usage
 
 ```
-python -m lp_uworld_rag ingest [--full]
-python -m lp_uworld_rag query "POST faculty-led/group-performance" [--collection technical] [--top-k 5] [--no-siblings]
-python -m lp_uworld_rag expand ctrl::reports::FacultyLedPerformanceController
-python -m lp_uworld_rag status
-python -m lp_uworld_rag mcp        # stdio MCP server for Claude Code / other agents
-python -m lp_uworld_rag ingest-code --repo reports [--full]   # ingest a repo's code (or --all)
-python -m lp_uworld_rag deep-query "why does POST faculty-led/group-performance return null body"
-python -m lp_uworld_rag query-code "group performance date range cap" --repo reports
-python -m lp_uworld_rag repos [--validate]
-python -m lp_uworld_rag validate-citations
+python -m lp_uworld_rag ingest [--full] [--strict]                                  # crawl + chunk + embed Confluence docs (--strict: fail on metadata errors)
+python -m lp_uworld_rag query "POST faculty-led/group-performance" [--collection functional|technical] [--top-k 5] [--no-siblings]
+python -m lp_uworld_rag expand ctrl::reports::FacultyLedPerformanceController        # pull one citation's full content
+python -m lp_uworld_rag status                                                       # indexed chunk counts by collection/doc_type
+python -m lp_uworld_rag eval                                                         # 5-tier quality harness -> RESULT: PASS
+python -m lp_uworld_rag validate                                                     # metadata-integrity check only (no re-ingest, no model load)
+python -m lp_uworld_rag mcp                                                          # stdio MCP server for Claude Code / other agents
+python -m lp_uworld_rag ingest-code (--repo reports | --all) [--full]                # ingest a repo's code (sibling .rag/ingest.json)
+python -m lp_uworld_rag deep-query "why does ... return null body" [--repo R ...] [--top-k-docs N] [--top-k-code N]
+python -m lp_uworld_rag query-code "group performance date range cap" [--repo reports] [--top-k N] [--file-hint PATH ...]
+python -m lp_uworld_rag repos [--validate]                                           # list registered repos (or probe conformance)
+python -m lp_uworld_rag validate-citations                                           # fact-check every File.cs:line doc citation
 ```
 
 `docs_functional` is expected to be **empty** until Feature Hub pages actually exist in Confluence --
 both are 404 as of this project's creation; the Technical Hub pages that link to them say so
 explicitly ("functional hub -- link pending").
+
+### Verify it worked
+
+```
+python -m lp_uworld_rag status            # per-collection chunk counts, e.g. "technical | endpoint | 30 chunks"
+python -m lp_uworld_rag repos --validate  # healthy: [PASS] <repo> (backend=index) -- manifest/rag_status/probe ok
+python -m lp_uworld_rag eval              # 5 tiers (metadata -> resolve -> retrieval -> expand -> routing) -> RESULT: PASS
+```
+
+A small/empty `functional` line is fine (see above). A tier-3 "NEAR"/"FAIL" in `eval` means
+retrieval quality slipped, not a crash.
 
 ## Project layout
 
@@ -119,8 +96,7 @@ The package is layered like an onion: **`common/`** (core primitives, no intra-p
 `__main__.py` / `mcp_server.py` at the top. `common/` exists to remove duplication — the two
 retrieval engines used to reimplement the same embed/Chroma/BM25/rerank plumbing and the token
 counter lived in two places. See [docs/repo-rag-contract.md](docs/repo-rag-contract.md) for the
-interface a repo's code-RAG plugs in through, and
-[docs/getting-started.md](docs/getting-started.md) for the layered walkthrough.
+interface a repo's code-RAG plugs in through.
 
 ## How results are shaped: citations, not inlined content
 
@@ -226,6 +202,37 @@ server -- see the override ladder (L0/L1/L2) and the frozen interface in
 doc chunk carries against a registered repo's actual checkout (and, where the code index carries
 line ranges, against what it actually retrieves) -- citations stay a rank boost everywhere else,
 this is the one place they're checked as fact.
+
+## Configuration (`config.json`)
+
+Copy `config.json.example` → `config.json` (the setup script does this). Key fields:
+
+| Section / field | What it does |
+| --- | --- |
+| `embed.model` | Docs embedding model. |
+| `embed.trustRemoteCode` | Allow the embedding model to run its own remote code (nomic needs it). |
+| `embed.queryPrefix` / `embed.textPrefix` | Asymmetric task prefixes nomic wants for query vs document. |
+| `embed.device` | `"auto"` / `"cuda"` / `"cpu"`. |
+| `store.functionalPersistDir` / `store.technicalPersistDir` | The two docs Chroma directories. |
+| `collections.functional` / `collections.technical` | Chroma collection names inside those dirs. |
+| `collections.functionalEmbedModel` / `technicalEmbedModel` | Optional per-collection embed override (`null` = use `embed.model`). |
+| `retrieval.topK` | Results returned per query (default 5). |
+| `retrieval.poolSize` | Candidate pool fetched before quota/rerank trims to `topK`. |
+| `retrieval.fusionMode` | RRF mode (`reciprocal_rerank`). |
+| `retrieval.numQueries` | 1 = no query expansion (no LLM call). |
+| `retrieval.quotas` | Min guaranteed slots per `doc_type` in the technical collection. |
+| `rerank.enabled` / `rerank.model` | Cross-encoder rerank on/off (on by default) + the model. |
+| `confluence.baseUrl` | Human-facing site URL (API calls go through the gateway, not this). |
+| `confluence.rootPageId` / `functionalRootPageId` | The two Confluence tree roots to crawl. |
+| `confluence.cloudId` | Atlassian cloud id — REST calls go through the `api.atlassian.com` gateway. |
+| `confluence.excludedTitles` | Page titles skipped entirely during crawl. |
+| `confluence.emailEnvVar` / `apiTokenEnvVar` | Names of the env vars holding the creds (ingest only). |
+| `confluence.emailValue` / `apiTokenValue` | Inline cred override (checked **before** the env var); keep `null` in the committed example. |
+| `repos.siblingScan` | Auto-discover sibling repos shipping `.rag/ingest.json` (default `true`). |
+| `repos.siblingRoot` | Optional override of the folder scanned for siblings (`null` = parent of this repo). |
+
+Repo **code** specs are repo-owned `.rag/ingest.json` files, auto-discovered from siblings (see
+"Central code ingestion") — there are no central specs or checkout paths in `config.json`.
 
 ## Scope
 

@@ -131,8 +131,8 @@ def _cmd_ingest_code(args: argparse.Namespace) -> int:
             print(f"[ingest-code] skipping manifest-only repos (self-managed index): "
                   f"{', '.join(skipped)}", file=sys.stderr)
         if not keys:
-            print("no ingestable repo specs found (sibling .rag/ingest.json, repos.checkouts, "
-                  "or repos/*/ingest.json)", file=sys.stderr)
+            print("no ingestable repos found -- a repo must ship .rag/ingest.json and be checked "
+                  "out beside lp-uworld-rag (see README -> Central code ingestion)", file=sys.stderr)
             return 1
     else:
         keys = [args.repo]
@@ -254,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest_code = sub.add_parser(
         "ingest-code", help="Ingest a repo's code into its own index via the shared engine.")
     ic_group = p_ingest_code.add_mutually_exclusive_group(required=True)
-    ic_group.add_argument("--repo", help="repoKey of a repo with a repos/<repoKey>/ingest.json spec.")
+    ic_group.add_argument("--repo", help="repoKey of a sibling repo shipping .rag/ingest.json.")
     ic_group.add_argument("--all", action="store_true", help="Ingest every configured repo.")
     p_ingest_code.add_argument("--full", action="store_true",
                                 help="Delete and rebuild the collection instead of delta-syncing.")

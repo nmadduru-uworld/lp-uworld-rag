@@ -38,11 +38,11 @@
     Print each step that would run, without executing anything (and without prompting for secrets).
 
 .EXAMPLE
-    .\setup.ps1 -Email you@uworld.com -Token abcd1234
+    .\scripts\setup.ps1 -Email you@uworld.com -Token abcd1234
 .EXAMPLE
-    .\setup.ps1 -Full
+    .\scripts\setup.ps1 -Full
 .EXAMPLE
-    .\setup.ps1 -DryRun
+    .\scripts\setup.ps1 -DryRun
 #>
 [CmdletBinding()]
 param(
@@ -56,9 +56,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-Set-Location $PSScriptRoot
+# This script lives in scripts/; the repo root is its parent.
+$root = Split-Path $PSScriptRoot -Parent
+Set-Location $root
 
-$py = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+$py = Join-Path $root '.venv\Scripts\python.exe'
 $fullArg = if ($Full) { @('--full') } else { @() }
 
 function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
@@ -104,7 +106,7 @@ function Resolve-Python {
            "  or download from https://www.python.org/downloads/  (pick the 64-bit, non-'t' build), then re-run.")
 }
 
-$venvDir = Join-Path $PSScriptRoot '.venv'
+$venvDir = Join-Path $root '.venv'
 if ((Test-Path $py) -and -not $DryRun) {
     Write-Step "venv already present (.venv) -- skipping creation"
 } elseif ($DryRun) {
@@ -139,7 +141,7 @@ if ($DryRun) {
 }
 
 # -- 3. config ------------------------------------------------------------------
-if (Test-Path (Join-Path $PSScriptRoot 'config.json')) {
+if (Test-Path (Join-Path $root 'config.json')) {
     Write-Step "config.json already exists -- leaving it untouched"
 } elseif ($DryRun) {
     Write-DryRun "Copy-Item config.json.example config.json"
@@ -153,10 +155,10 @@ if (Test-Path (Join-Path $PSScriptRoot 'config.json')) {
 # not ingested). Query/MCP never touch Confluence, so no token is needed and both ingests are
 # skipped. We only verify the index is present and (optionally) register the skill.
 if ($QueryOnly) {
-    $funcDir = Join-Path $PSScriptRoot 'chroma_functional'
-    $techDir = Join-Path $PSScriptRoot 'chroma_technical'
+    $funcDir = Join-Path $root 'chroma_functional'
+    $techDir = Join-Path $root 'chroma_technical'
     if (-not (Test-Path $techDir) -or -not (Test-Path $funcDir)) {
-        Write-Warning "chroma_functional/ and/or chroma_technical/ not found. Download the latest index folders (see ONBOARDING.md) and extract them into $PSScriptRoot, then re-run. (Or run full setup to ingest from Confluence.)"
+        Write-Warning "chroma_functional/ and/or chroma_technical/ not found. Download the latest index folders (see ONBOARDING.md) and extract them into $root, then re-run. (Or run full setup to ingest from Confluence.)"
     } else {
         Write-Step "prebuilt index present (chroma_functional + chroma_technical) -- skipping ingest"
     }
@@ -164,7 +166,7 @@ if ($QueryOnly) {
     & $py -m lp_uworld_rag status
     Write-Host ""
     Write-Host "Query-only setup complete. To make lp-rag available in every Claude Code session:" -ForegroundColor Green
-    Write-Host "  .\tools\Register-LpRag.ps1"
+    Write-Host "  .\scripts\Register-LpRag.ps1"
     return
 }
 

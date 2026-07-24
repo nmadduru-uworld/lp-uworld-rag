@@ -25,10 +25,10 @@ building it. Querying never contacts Confluence, so **no API token is required**
 1. **Clone the repo as a sibling** of your other UWorld repos (side-by-side under the same parent
    folder — this is what lets it auto-discover repo code specs later):
    ```
-   git clone <lp-uworld-rag repo URL>
+   git clone https://bitbucket.org/UWWebTech/uwwebtech.learningplatform.rag.net.git
    ```
 2. **Download the prebuilt index** (kept up to date by the maintainer):
-   👉 **Latest chroma folders (Google Drive): `<GOOGLE_DRIVE_SHARE_LINK>`**
+   👉 **Latest chroma folders (Google Drive):** https://drive.google.com/drive/folders/1_bwF3YT4zC1i51j6F_LoggSAJccd7JyK
    Download `lp-uworld-rag-index.zip` and **extract it into the repo root** so you have:
    ```
    lp-uworld-rag/
@@ -39,13 +39,13 @@ building it. Querying never contacts Confluence, so **no API token is required**
 3. **Set up the environment** (creates the venv, installs deps, verifies the index):
    ```
    cd lp-uworld-rag
-   .\setup.ps1 -QueryOnly
+   .\scripts\setup.ps1 -QueryOnly
    ```
    > If PowerShell blocks the script (`running scripts is disabled` / execution policy), run it as:
-   > `powershell -ExecutionPolicy Bypass -File .\setup.ps1 -QueryOnly` (same for `Register-LpRag.ps1`).
+   > `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -QueryOnly` (same for `Register-LpRag.ps1`).
 4. **Make it available in every Claude Code session** (skill + MCP server, one time):
    ```
-   .\tools\Register-LpRag.ps1
+   .\scripts\Register-LpRag.ps1
    ```
 
 **Done.** Open a **new** Claude Code session in any folder and ask, e.g.:
@@ -62,8 +62,8 @@ token** (create at <https://id.atlassian.com/manage-profile/security/api-tokens>
 
 ```
 cd lp-uworld-rag
-.\setup.ps1 -Email you@uworld.com -Token <your-token>
-.\tools\Register-LpRag.ps1
+.\scripts\setup.ps1 -Email you@uworld.com -Token <your-token>
+.\scripts\Register-LpRag.ps1
 ```
 
 `setup.ps1` creates the venv, installs, ingests the Confluence docs, ingests configured repo code,
@@ -89,6 +89,9 @@ out **as a sibling** of lp-uworld-rag — it's auto-discovered, with **no change
 
 Then (maintainer, or you if you have a Confluence token): `python -m lp_uworld_rag ingest-code --all`.
 
+Full details, the shared defaults it inherits, and chunker/retriever overrides are in the
+README → **Central code ingestion**.
+
 ---
 
 ## Maintainer — refresh & publish the index
@@ -97,12 +100,13 @@ When docs or code change, rebuild and re-share so Path-A users get the update:
 
 ```
 cd lp-uworld-rag
-.\setup.ps1 -Full                      # re-ingest docs + code
+.\scripts\setup.ps1 -Full                      # re-ingest docs + code
 # zip the built index and upload, replacing the file behind the Drive link:
 Compress-Archive -Path chroma_functional, chroma_technical, code_stores -DestinationPath lp-uworld-rag-index.zip -Force
 ```
-Upload `lp-uworld-rag-index.zip` to the shared Google Drive folder (`<GOOGLE_DRIVE_SHARE_LINK>`),
-keeping the same link so this doc stays valid.
+Upload `lp-uworld-rag-index.zip` to the shared Google Drive folder
+(https://drive.google.com/drive/folders/1_bwF3YT4zC1i51j6F_LoggSAJccd7JyK), keeping the same link so
+this doc stays valid.
 
 ---
 
@@ -112,9 +116,9 @@ keeping the same link so this doc stays valid.
 |---|---|
 | `No supported Python found` | Install a 64-bit standard build 3.10–3.14: `winget install Python.Python.3.12`, reopen the terminal |
 | C++ / build errors during install | You're on a **free-threaded ("t")** or 32-bit Python — install the standard 64-bit build instead |
-| `lp-rag` tools not showing in Claude Code | Run `.\tools\Register-LpRag.ps1`, then start a **new** session |
-| `Missing Confluence API token` | Only ingest needs a token; for Path A use `.\setup.ps1 -QueryOnly` (no token) |
+| `lp-rag` tools not showing in Claude Code | Run `.\scripts\Register-LpRag.ps1`, then start a **new** session |
+| `Missing Confluence API token` | Only ingest needs a token; for Path A use `.\scripts\setup.ps1 -QueryOnly` (no token) |
 | `status` shows 0 chunks | The chroma folders weren't extracted into the repo root — re-download and unzip there |
 | Broken `.venv` | Delete the `.venv` folder and re-run `setup.ps1` (it also self-recreates a partial venv) |
-| `running scripts is disabled on this system` | Run via `powershell -ExecutionPolicy Bypass -File .\setup.ps1 …`, or once per session `Set-ExecutionPolicy -Scope Process Bypass`, or unblock the file (`Unblock-File .\setup.ps1`) |
+| `running scripts is disabled on this system` | Run via `powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1 …`, or once per session `Set-ExecutionPolicy -Scope Process Bypass`, or unblock the file (`Unblock-File .\scripts\setup.ps1`) |
 | Your repo's code isn't found | It must ship `.rag/ingest.json` **and** be cloned **beside** lp-uworld-rag (same parent folder). Siblings are required — there's no per-repo config to set |
